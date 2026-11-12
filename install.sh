@@ -31,7 +31,8 @@ PG_SUPER="${PG_SUPER:-postgres}"
 # 安装期出网代理（apt / curl / go 下载走它）。留空 = 直连。
 # 只作用于「装东西」，与运行期 Agent 的目标代理、LLM 代理互不相干。
 INSTALL_PROXY="${INSTALL_PROXY:-${HTTPS_PROXY:-}}"
-IMAGE="ghcr.io/${REPO,,}"
+# macOS 自带 bash 3.2（不支持 ${var,,} 小写展开），用 tr 做兼容
+IMAGE="ghcr.io/$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')"
 ASSUME_YES=0
 # 是否安装特权助手 pojun-hostd(提供「系统 → 宿主环境」页的一键安装)。
 # 默认装;不想让 Web 端具备装包能力时用 --no-installer 关掉。
