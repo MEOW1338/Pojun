@@ -36,13 +36,16 @@
 curl -fsSL https://github.com/chu0119/Pojun/releases/latest/download/install.sh | sudo bash
 ```
 
-**macOS 13+（Apple Silicon / Intel，预编译包直跑）：**
+**macOS 13+（Apple Silicon / Intel，一条命令，不需要 sudo）：**
 
 ```bash
-# 到 Releases 下载 pojun-<版本>-darwin-arm64.zip（M 系列）或 -amd64.zip（Intel），解压后：
-cp config.example.json config.json    # 填好 database 连接（brew install postgresql@16）
-./start.sh                            # → http://localhost:8787
+curl -fsSL https://github.com/chu0119/Pojun/releases/latest/download/install.sh | bash
 ```
+
+自动完成：Homebrew 检测（没有就装）→ PostgreSQL 16 安装与服务化 → 下载并
+校验 darwin 包 → 生成 config.json → 注册 launchd 用户级服务（开机自启 +
+崩溃自动拉起）→ 健康检查。渗透工具与 LibreOffice 等 `brew install` 按需装
+（缺失工具在「宿主环境」页如实显示），详见[安装详解](#安装详解)。
 
 **Windows / 已有 Docker（工具链全在镜像里，宿主机零安装）：**
 
@@ -354,7 +357,7 @@ flowchart TB
 | **Debian 12 (bookworm)** | ✅ **首选**：稳定、systemd、PostgreSQL 15 源内、LibreOffice/poppler/uv 齐全 |
 | **Ubuntu 22.04 / 24.04 LTS** | ✅ **首选**：与 Debian 同源，长期支持 |
 | **Windows 10/11（Docker Desktop）** | ✅ **支持**：WSL2 后端跑 Linux 容器，工具链全在镜像里，见[方式二](#方式二docker-compose-直跑ghcr-已发布镜像)的 Windows 说明 |
-| **macOS 13+（Apple Silicon / Intel）** | ✅ **支持**：预编译包直跑（需自装 PostgreSQL 与文档渲染依赖），见[方式三](#方式三下载预编译包linux--macosamd64-与-arm64)；工具链不全时「宿主环境」页如实显示缺失 |
+| **macOS 13+（Apple Silicon / Intel）** | ✅ **支持**：一条命令安装（install.sh 自动走 brew + launchd，不需要 sudo），见[快速开始](#快速开始)；工具链不全时「宿主环境」页如实显示缺失 |
 | Kali | ⚠️ 可用（开箱全套工具），但滚动更新有升级风险，生产环境不建议 |
 | RHEL / Rocky / CentOS Stream | ⚠️ 支持（dnf 路径），但 ffuf/sqlmap 新版等工具覆盖少，按需自装 |
 | Windows 原生（exe 直跑） | ❌ 不支持：特权助手/工具链/守护脚本均为 Linux 体系，请用 Docker Desktop 或 WSL2 |
@@ -448,6 +451,10 @@ cp config.example.json config.json   # 填好 database 连接
 > （macOS 上的页面一键更新同样可用，按平台自动匹配发布包）。
 
 **macOS 补充说明：**
+
+macOS 也可以用 install.sh 一条命令安装（见[快速开始](#快速开始)）——脚本自动走
+Homebrew + launchd，与 Linux 同款体验；下面的手动方式适合不想装 Homebrew 或
+想精细控制各依赖的场景。
 
 - 依赖自装：`brew install postgresql@16 libheif poppler libreoffice` 并启动 PostgreSQL；
   Node ≥ 20（Playwright MCP）与 `uv`（FOFA MCP）按需安装；
