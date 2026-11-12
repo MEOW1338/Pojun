@@ -5,6 +5,8 @@
 #
 #   sudo ./install.sh                     交互选择（二进制 / Docker）
 #   sudo ./install.sh --mode=binary       二进制：单文件 + systemd + 系统 PostgreSQL
+#                                         （macOS 上自动走 launchd + Homebrew PostgreSQL，
+#                                          不需要 sudo：brew 与用户级 launchd 都是当前用户）
 #   sudo ./install.sh --mode=docker       Docker Compose：容器 + 容器内 PostgreSQL
 #   sudo ./install.sh --mode=binary --with-tools
 #
@@ -89,7 +91,7 @@ for arg in "$@"; do
     --mode=*)          MODE="${arg#--mode=}" ;;
     --with-tools)      WITH_TOOLS=1 ;;
     --version=*)       VERSION="${arg#--version=}" ;;
-    --dir=*)           INSTALL_DIR="${arg#--dir=}" ;;
+    --dir=*)           INSTALL_DIR="${arg#--dir=}"; DIR_EXPLICIT=1 ;;
     --listen=*)        LISTEN_ADDR="${arg#--listen=}" ;;
     --proxy=*)         PROXY_ADDR="${arg#--proxy=}" ;;
     --install-proxy=*) INSTALL_PROXY="${arg#--install-proxy=}" ;;
@@ -104,15 +106,37 @@ for arg in "$@"; do
 done
 
 # ── 前置检查 ─────────────────────────────────────
-[ "$(uname -s)" = "Linux" ] || die "仅支持 Linux"
-[ "$(id -u)" = "0" ] || die "请用 root/sudo 运行"
+DIR_EXPLICIT="${DIR_EXPLICIT:-0}"
+IS_MAC=0
+case "$(uname -s)" in
+  Linux)  : ;;
+  Darwin) IS_MAC=1 ;;
+  *) die "仅支持 Linux / macOS" ;;
+esac
 
 ARCH="$(uname -m)"
-case "$ARCH" in
-  x86_64)  PKG_ARCH="linux-amd64" ;;
-  aarch64) PKG_ARCH="linux-arm64" ;;
-  *) die "不支持的架构: $ARCH（支持 x86_64/aarch64）" ;;
-esac
+if [ "$IS_MAC" = "1" ]; then
+  # macOS：brew 与用户级 launchd 都是当前用户体系，全程不需要 sudo。
+  # 显式用 sudo 反而坏事：root 的 brew/HOME 与用户不一致，服务会落在 root 的
+  # LaunchAgents 里起不来。目录默认也放 $HOME/pojun（/opt 需要特权）。
+  [ "$(id -u)" = "0" ] && die "macOS 请直接运行本脚本（不要加 sudo）"
+  case "$ARCH" in
+    arm64)  PKG_ARCH="darwin-arm64" ;;
+    x86_64) PKG_ARCH="darwin-amd64" ;;
+    *) die "不支持的 Mac 架构: $ARCH（支持 arm64/x86_64）" ;;
+  esac
+  # /opt 在 macOS 需要特权；默认装到家目录，显式 --dir 优先
+  if [ "$DIR_EXPLICIT" != "1" ]; then
+    INSTALL_DIR="$HOME/pojun"
+  fi
+else
+  [ "$(id -u)" = "0" ] || die "请用 root/sudo 运行"
+  case "$ARCH" in
+    x86_64)  PKG_ARCH="linux-amd64" ;;
+    aarch64) PKG_ARCH="linux-arm64" ;;
+    *) die "不支持的架构: $ARCH（支持 x86_64/aarch64）" ;;
+  esac
+fi
 
 # curl 是两种形态的公共依赖
 if ! command -v curl >/dev/null 2>&1; then
@@ -434,6 +458,7 @@ fetch_release(){
 # 二进制部署
 # ══════════════════════════════════════════════════
 deploy_binary(){
+  if [ "$IS_MAC" = "1" ]; then deploy_binary_darwin; return; fi
   command -v systemctl >/dev/null 2>&1 || die "未检测到 systemd"
   command -v unzip   >/dev/null 2>&1 || { apt-get install -y unzip >/dev/null 2>&1 || dnf install -y unzip >/dev/null 2>&1 || die "需要 unzip"; }
 
@@ -623,6 +648,132 @@ UNIT
 # 走数据库而不是 HTTP API：设置接口要 JWT，而管理员密码是用户首次访问
 # 时自己设的，install.sh 拿不到。settings 表结构简单（key/value），
 # 直接 UPSERT 最省事。
+# ══════════════════════════════════════════════════
+# 二进制部署 · macOS（launchd + Homebrew PostgreSQL）
+# ══════════════════════════════════════════════════
+# 与 Linux 版的差异（其余流程——下载/校验/解压/config.json/一键更新——完全复用）：
+#   - 包管理器 apt/dnf → Homebrew；PostgreSQL 走 postgresql@16 formula，
+#     superuser 就是当前用户（brew 不建 postgres 系统用户），psql 直连即可；
+#   - 服务化 systemd → launchd：LaunchAgents plist 拉 start.sh（KeepAlive）。
+#     start.sh 本身就是守护脚本（崩溃退避重拉 + 一键更新换装都在里面），
+#     launchd 只负责「开机自启 + 意外退出拉起」，不重复实现守护逻辑；
+#   - 不装 pojun-hostd（apt 体系工具安装不可用），不建系统用户；
+#   - 全程当前用户，不需要 sudo（sudo 反而会破坏 brew/launchd 的一致性）。
+deploy_binary_darwin(){
+  # Homebrew：没有就装（官方安装器，需要交互确认一次密码给 /usr/local 写权限的
+  # Intel 机器；Apple Silicon 装到 /opt/homebrew 不需要密码）
+  if ! command -v brew >/dev/null 2>&1; then
+    warn "未检测到 Homebrew，先安装它（可能要求输入密码/回车确认）..."
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"       || die "Homebrew 安装失败；也可手动安装后重跑本脚本"
+    eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || true)"
+    eval "$(/usr/local/bin/brew shellenv 2>/dev/null || true)"
+  fi
+  command -v brew >/dev/null 2>&1 || die "brew 不可用（PATH 未包含？）"
+  local BREW_PREFIX
+  BREW_PREFIX="$(brew --prefix)"
+  export PATH="$BREW_PREFIX/bin:$BREW_PREFIX/opt/postgresql@16/bin:$PATH"
+
+  command -v unzip >/dev/null 2>&1 || brew install unzip >/dev/null 2>&1 || die "需要 unzip"
+
+  # PostgreSQL 16（硬依赖）。按 formula 是否安装来判断，而不是 command -v psql：
+  # 机器上可能有别的 psql（旧版 formula / 系统 CLI），会让我们误以为 @16 已就位。
+  if ! brew list --formula 2>/dev/null | grep -q "^postgresql@16$"; then
+    info "安装 PostgreSQL 16（brew，首次几分钟）..."
+    brew install postgresql@16 || die "postgresql@16 安装失败"
+  fi
+  export PATH="$BREW_PREFIX/opt/postgresql@16/bin:$PATH"
+  command -v psql >/dev/null 2>&1 || die "psql 不在 PATH（postgresql@16 是 keg-only，脚本已显式加 PATH，不应走到这）"
+  if ! brew services list 2>/dev/null | grep -q "postgresql@16.*started"; then
+    info "启动 PostgreSQL 服务（brew services = launchd）..."
+    brew services start postgresql@16 || die "启动 PostgreSQL 失败"
+  fi
+  local i
+  for i in $(seq 1 30); do pg_isready -q >/dev/null 2>&1 && break; sleep 2; done
+  pg_isready -q >/dev/null 2>&1 || die "PostgreSQL 60s 内未就绪（brew services list 看状态）"
+  ok "PostgreSQL 就绪"
+
+  fetch_release
+  local src="$TMP/unpack/pojun-${VERSION#v}-${PKG_ARCH}"
+  [ -d "$src" ] || die "发行包结构异常: 找不到 $src"
+
+  mkdir -p "$INSTALL_DIR"
+  for b in pojun pojun-hostd pojun-maint; do
+    [ -f "$src/$b" ] || continue
+    cp "$src/$b" "$INSTALL_DIR/.$b.new"
+    chmod +x "$INSTALL_DIR/.$b.new"
+    mv -f "$INSTALL_DIR/.$b.new" "$INSTALL_DIR/$b"
+  done
+  local f base
+  for f in "$src"/*; do
+    base="$(basename "$f")"
+    case "$base" in pojun|pojun-hostd|pojun-maint) continue ;; esac
+    cp -r "$f" "$INSTALL_DIR/"
+  done
+  chmod +x "$INSTALL_DIR/start.sh"
+  ok "程序就绪: $INSTALL_DIR/pojun"
+
+  # config.json（仅首次；升级不覆盖）
+  if [ ! -f "$INSTALL_DIR/config.json" ]; then
+    local DB_PASS
+    DB_PASS="$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
+    # brew 的 PostgreSQL superuser 就是当前用户，无需 sudo -u postgres
+    if psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='pojun'" 2>/dev/null | grep -q 1; then
+      info "数据库角色 pojun 已存在，同步密码"
+      psql -c "ALTER ROLE pojun LOGIN PASSWORD '$DB_PASS'" >/dev/null
+    else
+      psql -c "CREATE ROLE pojun LOGIN PASSWORD '$DB_PASS'" >/dev/null
+    fi
+    psql -tAc "SELECT 1 FROM pg_database WHERE datname='pojun'" 2>/dev/null | grep -q 1       || createdb -O pojun pojun
+    cat > "$INSTALL_DIR/config.json" <<JSON
+{
+  "database": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "user": "pojun",
+    "password": "$DB_PASS",
+    "dbname": "pojun",
+    "sslmode": "disable"
+  }
+}
+JSON
+    chmod 600 "$INSTALL_DIR/config.json"
+    ok "数据库 pojun 就绪（密码已写入 config.json，权限 600）"
+  else
+    ok "沿用既有 config.json（升级不覆盖）"
+  fi
+
+  # launchd 用户级服务（开机自启 + KeepAlive 崩溃拉起）
+  local PLIST_LABEL="com.pojun" PLIST_DIR="$HOME/Library/LaunchAgents" PLIST="$PLIST_DIR/$PLIST_LABEL.plist"
+  mkdir -p "$PLIST_DIR"
+  cat > "$PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$PLIST_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>$INSTALL_DIR/start.sh</string>
+  </array>
+  <key>WorkingDirectory</key><string>$INSTALL_DIR</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>$INSTALL_DIR/pojun.launchd.log</string>
+  <key>StandardErrorPath</key><string>$INSTALL_DIR/pojun.launchd.log</string>
+</dict>
+</plist>
+PLIST
+  launchctl bootout "gui/$(id -u)/$PLIST_LABEL" 2>/dev/null || true
+  launchctl bootstrap "gui/$(id -u)" "$PLIST" || die "launchd 注册失败（$PLIST）"
+  ok "launchd 服务已注册（开机自启，崩溃自动拉起）"
+
+  info "可选依赖（按需自装，不影响核心功能）："
+  info "  brew install libreoffice --cask   # Word/证据渲染（装完 ln -sf "/Applications/LibreOffice.app/Contents/MacOS/soffice" "$BREW_PREFIX/bin/soffice"）"
+  info "  brew install poppler imagemagick  # PDF/图片预览"
+  info "  brew install nmap sqlmap nuclei ffuf ...  # 渗透工具按需装，缺失项在「宿主环境」页如实显示"
+}
+
 persist_install_proxy(){
   [ -n "$INSTALL_PROXY" ] || return 0
   [ -f "$INSTALL_DIR/config.json" ] || { warn "找不到 config.json，跳过写入运行期代理"; return 0; }
@@ -1137,7 +1288,13 @@ case "$MODE" in
   *) die "未知部署形态: $MODE" ;;
 esac
 
-if [ "$WITH_TOOLS" = "1" ]; then install_tools; fi
+if [ "$WITH_TOOLS" = "1" ]; then
+  if [ "$IS_MAC" = "1" ]; then
+    warn "--with-tools 在 macOS 不可用（工具安装器是 apt/dnf 体系）；请 brew install 按需装"
+  else
+    install_tools
+  fi
+fi
 
 # 代理要落地到运行期设置，宿主环境页的「一键安装」才用同一个代理。
 # 放在最后：此时服务已起、schema 已建。
@@ -1151,7 +1308,12 @@ for _ in $(seq 1 30); do
     ok "服务已就绪 → http://${HOST_IP:-127.0.0.1}:${PORT}（首次访问设置管理员密码）"
     info "下一步：①设置管理员密码 ②「LLM 配置」配通道 ③「系统→MCP」用预设接入 FOFA/Playwright ④建任务可套用内置 Playbook"
     if [ "$MODE" = "binary" ]; then
-      systemctl --no-pager status "$SERVICE" | head -5
+      if [ "$IS_MAC" = "1" ]; then
+        tail -5 "$INSTALL_DIR/pojun.launchd.log" 2>/dev/null || true
+        info "服务管理：launchctl kickstart -k gui/$(id -u)/com.pojun 重启 | launchctl bootout gui/$(id -u)/com.pojun 停止 | tail -f $INSTALL_DIR/pojun.launchd.log 看日志"
+      else
+        systemctl --no-pager status "$SERVICE" | head -5
+      fi
     else
       ( cd "$INSTALL_DIR" && docker compose ps )
     fi
@@ -1160,7 +1322,11 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 if [ "$MODE" = "binary" ]; then
-  warn "60s 内未就绪，查看日志: journalctl -u $SERVICE -n 50"
+  if [ "$IS_MAC" = "1" ]; then
+    warn "60s 内未就绪，查看日志: tail -n 50 $INSTALL_DIR/pojun.launchd.log"
+  else
+    warn "60s 内未就绪，查看日志: journalctl -u $SERVICE -n 50"
+  fi
 else
   warn "60s 内未就绪，查看日志: cd $INSTALL_DIR && docker compose logs --tail 50"
 fi

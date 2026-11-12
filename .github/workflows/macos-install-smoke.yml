@@ -1,0 +1,98 @@
+# macOS 安装脚本真机冒烟：在 GitHub 的 macos-14（Apple Silicon）runner 上
+# 跑 install.sh 的 Darwin 分支全流程，验证「一条命令安装」在真实 macOS 上可用。
+#
+# 验证范围（与 Linux 版 install.sh 流程对齐的 macOS 对应物）：
+#   Homebrew 检测/复用 → postgresql@16 安装与服务化（brew services=launchd）→
+#   Release darwin 包下载与 SHA256 校验 → config.json 生成 → launchd 用户级服务
+#   （KeepAlive）→ /api/health 200 → 幂等重跑（升级路径不动数据）。
+#
+# 不在范围：LibreOffice cask（约 400MB 下载，仅提示不安装）、渗透工具链、
+# pojun-hostd（macOS 本就不支持）。这些在文档里如实说明。
+#
+# 用法：手动 workflow_dispatch，或 main 分支改动 install.sh 时自动跑。
+# 版本默认冒烟当前最新 Release（用 -y 非交互模式）。
+
+name: macos-install-smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "install.sh"
+      - ".github/workflows/macos-install-smoke.yml"
+
+jobs:
+  smoke:
+    runs-on: macos-14
+    timeout-minutes: 30
+    env:
+      # 冒烟钉一个明确的已发布版本，避免 latest 变动导致不可复现；
+      # 版本里有 darwin 包自 v0.4.66 起。
+      POJUN_SMOKE_VERSION: v0.4.66
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Pre-flight
+        run: |
+          sw_vers
+          uname -m
+          brew --version | head -1
+          curl --version | head -1
+          python3 --version
+
+      - name: Run install.sh (macOS / binary / non-interactive)
+        run: |
+          bash install.sh --mode=binary -y --version="$POJUN_SMOKE_VERSION" 2>&1 | tee /tmp/install.log
+          # 关键里程碑必须在输出里出现，防止脚本静默降级
+          grep -q "PostgreSQL 就绪" /tmp/install.log
+          grep -q "SHA256 校验通过" /tmp/install.log
+          grep -q "数据库 pojun 就绪" /tmp/install.log
+          grep -q "launchd 服务已注册" /tmp/install.log
+          grep -q "服务已就绪" /tmp/install.log
+
+      - name: Verify service (launchd / health / database)
+        run: |
+          set -e
+          # launchd 服务在跑
+          launchctl print "gui/$(id -u)/com.pojun" | grep -q "state = running" \
+            || launchctl print "gui/$(id -u)/com.pojun" | grep -E "pid = [0-9]+"
+          # 健康检查
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/health)
+          [ "$code" = "200" ] || { echo "health=$code"; tail -50 ~/pojun/pojun.launchd.log; exit 1; }
+          echo "health 200 OK"
+          # 数据库角色与库
+          PGBIN="$(brew --prefix)/opt/postgresql@16/bin"
+          "$PGBIN/psql" -tAc "SELECT 1 FROM pg_roles WHERE rolname='pojun'" | grep -q 1
+          "$PGBIN/psql" -tAc "SELECT 1 FROM pg_database WHERE datname='pojun'" | grep -q 1
+          # config.json 权限
+          [ "$(stat -f '%Lp' ~/pojun/config.json)" = "600" ]
+
+      - name: Verify idempotent re-run (upgrade path)
+        run: |
+          # 二次执行 = 原地升级：config.json / 数据库必须原样保留
+          md5_before=$(md5 -q ~/pojun/config.json)
+          bash install.sh --mode=binary -y --version="$POJUN_SMOKE_VERSION" >/tmp/reinstall.log 2>&1
+          grep -q "沿用既有 config.json" /tmp/reinstall.log
+          md5_after=$(md5 -q ~/pojun/config.json)
+          [ "$md5_before" = "$md5_after" ] || { echo "config.json 被覆盖！"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/health)
+          [ "$code" = "200" ] || { echo "reinstall health=$code"; exit 1; }
+          echo "idempotent re-run OK (health 200, config preserved)"
+
+      - name: Verify KeepAlive (kill process, launchd revives)
+        run: |
+          # KeepAlive 语义验证：杀掉 pojun 进程，launchd + start.sh 应把它拉回来
+          pkill -x pojun || true
+          sleep 15
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8787/api/health)
+          [ "$code" = "200" ] || { echo "after kill health=$code"; exit 1; }
+          echo "KeepAlive revive OK"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "── install.log tail ──"
+          tail -20 /tmp/install.log 2>/dev/null || true
+          echo "── launchd log tail ──"
+          tail -20 ~/pojun/pojun.launchd.log 2>/dev/null || true
