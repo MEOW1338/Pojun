@@ -1319,7 +1319,9 @@ for _n in $(seq 1 30); do
   curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/api/health" 2>/dev/null || health_rc=$?
   echo "[*] health check #${_n}: rc=${health_rc}"
   if [ "$health_rc" = "0" ]; then
-    HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    # macOS 的 hostname 没有 -I（退出码 1），set -o pipefail 会把它传染整条管道、
+    # set -e 当场杀掉脚本——曾让 macOS 安装在 health 200 后静默退出
+    HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
     ok "服务已就绪 → http://${HOST_IP:-127.0.0.1}:${PORT}（首次访问设置管理员密码）"
     info "下一步：①设置管理员密码 ②「LLM 配置」配通道 ③「系统→MCP」用预设接入 FOFA/Playwright ④建任务可套用内置 Playbook"
     if [ "$MODE" = "binary" ]; then
