@@ -18,7 +18,7 @@
 
 **Go 单体后端** · **Next.js 内嵌前端** · **PostgreSQL** · **多 Agent 自主推进** · **全程证据留痕**
 
-📦 [一条命令安装](#-快速开始) · 🧠 [单技能版 pojun-skill](https://github.com/chu0119/pojun-skill) —— 本平台方法论的单 skill 版，任意 AI Agent 即装即用
+📦 [一条命令安装](#快速开始) · 🧠 [单技能版 pojun-skill](https://github.com/chu0119/pojun-skill) —— 本平台方法论的单 skill 版，任意 AI Agent 即装即用
 
 </div>
 
@@ -72,8 +72,6 @@ Pojun 是一套 **LLM 多 Agent 自主渗透测试平台**：给一句话目标�
 | 控制台登录：首次启动初始化管理员，防爆破锁定 | 总览：任务 / 发现 / 资产 / Token 全局态势与趋势 |
 | :---: | :---: |
 | ![登录](screenshots/pojun-login.png) | ![总览](screenshots/pojun-dashboard.png) |
-| :---: |
-| ![总览](screenshots/pojun-dashboard.png) |
 
 **任务执行**
 
@@ -84,6 +82,10 @@ Pojun 是一套 **LLM 多 Agent 自主渗透测试平台**：给一句话目标�
 | 任务总览：目标逐条带验收标准，达成状态诚实呈现 |
 | :---: |
 | ![任务总览](screenshots/pojun-task-overview.png) |
+
+| 目标管理与操作约束：目标逐条勾选达成，allow/deny 约束直接约束 planner 派单 |
+| :---: |
+| ![目标管理与操作约束](screenshots/pojun-task-goals.png) |
 
 **发现与证据**
 
@@ -98,12 +100,6 @@ Pojun 是一套 **LLM 多 Agent 自主渗透测试平台**：给一句话目标�
 | 全局流量代理：所有 HTTP/S 往来逐请求留存 |
 | :---: |
 | ![流量](screenshots/pojun-traffic.png) |
-
-**证据与交付**
-
-| 证据附件：截图 / 数据样本自动归档、缩略图预览 | 现场截图：按漏洞归档，Word 报告自动嵌图 |
-| :---: | :---: |
-| ![证据附件](screenshots/pojun-evidence.png) | ![现场截图](screenshots/pojun-finding-shots.png) |
 
 **平台配置**
 
