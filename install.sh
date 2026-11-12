@@ -748,7 +748,11 @@ JSON
   fi
 
   # launchd 用户级服务（开机自启 + KeepAlive 崩溃拉起）
-  local PLIST_LABEL="com.pojun" PLIST_DIR="$HOME/Library/LaunchAgents" PLIST="$PLIST_DIR/$PLIST_LABEL.plist"
+  # 拆开声明：local 是命令，同一行 `local A=1 B=$A` 的 $A 在 A 赋值前展开，
+  # set -u 下直接报 unbound variable
+  local PLIST_LABEL="com.pojun"
+  local PLIST_DIR="$HOME/Library/LaunchAgents"
+  local PLIST="$PLIST_DIR/$PLIST_LABEL.plist"
   mkdir -p "$PLIST_DIR"
   cat > "$PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
