@@ -151,7 +151,9 @@ command -v curl >/dev/null 2>&1 || die "curl 安装失败，请手动安装"
 # "error setting certificate file"，所有 HTTPS 请求全挂且报错指不到真因。
 # 两大发行版的 CA 包位置都判一下，缺哪个补哪个；装不上也不阻断（真实新
 # 机器几乎都自带，这里只兜极端裁剪过的系统）。
-if [ ! -e /etc/ssl/certs/ca-certificates.crt ] && [ ! -e /etc/pki/tls/certs/ca-bundle.crt ]; then
+# macOS 的系统证书在 /etc/ssl/cert.pem（随系统自带），Linux 才需要下面的兜底安装
+if [ "$IS_MAC" != "1" ] \
+   [ ! -e /etc/ssl/certs/ca-certificates.crt ] && [ ! -e /etc/pki/tls/certs/ca-bundle.crt ]; then
   info "未检测到 CA 证书包，尝试安装 ca-certificates..."
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update -qq >/dev/null 2>&1 || true
