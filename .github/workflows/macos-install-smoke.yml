@@ -9,7 +9,7 @@
 # 不在范围：LibreOffice cask（约 400MB 下载，仅提示不安装）、渗透工具链、
 # pojun-hostd（macOS 本就不支持）。这些在文档里如实说明。
 #
-# 用法：手动 workflow_dispatch，或 main 分支改动 install.sh 时自动跑。
+# runner 用 macos-15（ARM）：macos-14 已被 GitHub 淘汰（label 不可用）。
 # 版本默认冒烟当前最新 Release（用 -y 非交互模式）。
 
 name: macos-install-smoke
@@ -24,7 +24,7 @@ on:
 
 jobs:
   smoke:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 30
     env:
       # 冒烟钉一个明确的已发布版本，避免 latest 变动导致不可复现；
