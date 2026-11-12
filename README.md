@@ -24,21 +24,47 @@
 
 ---
 
+## 快速开始
+
+> 依赖 **PostgreSQL**（安装脚本/Compose 自动处理）；探索需在 UI 里配置 **LLM**
+> （Anthropic / OpenAI / 任意兼容网关，多通道轮询）。详细安装方式、系统选择、
+> 公网部署与升级 → [安装详解](#安装详解)。
+
+**Linux（Debian / Ubuntu / RHEL / Kali 等，root 执行，全自动交互安装）：**
+
+```bash
+curl -fsSL https://github.com/chu0119/Pojun/releases/latest/download/install.sh | sudo bash
+```
+
+**Windows / 已有 Docker（工具链全在镜像里，宿主机零安装）：**
+
+```bash
+git clone --depth 1 https://github.com/chu0119/Pojun.git pojun && cd pojun
+cp .env.example .env    # Windows 用 copy；至少改 POSTGRES_PASSWORD
+# Windows（Docker Desktop，WSL2 后端）：
+docker compose -f docker-compose.yml -f docker-compose.windows.yml up -d
+# Linux / 其他：
+docker compose up -d
+# → http://localhost:8787
+```
+
+**装好之后（3 分钟上手）：**
+
+1. 浏览器打开 `http://<host>:8787` → 初始化管理员密码（≥8 位）
+2. 「LLM 配置」页配模型通道（≥2 个通道 + 开启轮询 = 实战推荐）
+3. 「宿主环境」页一键装齐工具（Docker 镜像已内置全部 66 件，可跳过）
+4. 新建任务，给一句话目标
+
+---
+
 ## 目录
 
-- [这是什么](#这是什么)
-- [界面速览](#界面速览)
-- [核心能力](#核心能力)
-- [系统架构](#系统架构)
-- [快速开始](#快速开始)
-- [配置速查](#配置速查)
-- [内置资产清单：技能 / MCP / 工具](#内置资产清单技能--mcp--工具)
-- [与同类项目的差异](#与同类项目的差异)
-- [实战纪律与安全边界](#实战纪律与安全边界)
-- [开发与贡献](#开发与贡献)
-- [文档索引](#文档索引)
-- [来源声明](#来源声明)
-- [许可与免责声明](#许可与免责声明)
+| | |
+|---|---|
+| **🚀 部署** | [安装详解](#安装详解) · [配置速查](#配置速查) |
+| **📸 产品** | [界面速览](#界面速览) · [核心能力](#核心能力) · [系统架构](#系统架构) · [与同类项目的差异](#与同类项目的差异) |
+| **🧰 资产与纪律** | [内置资产清单：技能 / MCP / 工具](#内置资产清单技能--mcp--工具) · [实战纪律与安全边界](#实战纪律与安全边界) |
+| **👥 参与** | [开发与贡献](#开发与贡献) · [文档索引](#文档索引) · [来源声明](#来源声明) · [许可与免责声明](#许可与免责声明) |
 
 ---
 
@@ -307,10 +333,11 @@ flowchart TB
 
 ---
 
-## 快速开始
+## 安装详解
 
-> 依赖 **PostgreSQL**；探索需配置 **LLM**（UI 里配，支持 Anthropic / OpenAI /
-> 任意 OpenAI 兼容网关，多通道轮询 + 故障转移）。
+> 快速上手用上面的[快速开始](#快速开始)就够了；本节是系统选择、四种安装方式、
+> 公网部署与升级的完整参考。依赖 **PostgreSQL**；探索需配置 **LLM**（UI 里配，
+> 支持 Anthropic / OpenAI / 任意 OpenAI 兼容网关，多通道轮询 + 故障转移）。
 
 ### 系统选择与配置要求
 
@@ -420,13 +447,6 @@ CGO_ENABLED=0 go build -tags embedui -o pojun ./cmd/pojun
 CGO_ENABLED=0 go build -o pojun-hostd ./cmd/pojun-hostd   # 可选：特权安装助手
 ./start.sh
 ```
-
-### 首次启动
-
-1. 浏览器打开 `http://<host>:8787` → 初始化管理员密码（≥8 位）
-2. 「LLM 配置」页配模型通道（≥2 个通道 + 开启轮询 = 实战推荐）
-3. 「宿主环境」页一键装齐缺失工具（或 `install.sh --with-tools`）
-4. 新建任务，给一句话目标
 
 ### 公网部署
 
