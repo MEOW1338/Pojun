@@ -13,7 +13,7 @@
 [![CI](https://github.com/chu0119/Pojun/actions/workflows/ci.yml/badge.svg)](https://github.com/chu0119/Pojun/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 ![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go&logoColor=white)
-![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%2F%20arm64-lightgrey)
+![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Docker-lightgrey)
 ![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?logo=docker&logoColor=white)
 
 **Go 单体后端** · **Next.js 内嵌前端** · **PostgreSQL** · **多 Agent 自主推进** · **全程证据留痕**
@@ -346,6 +346,7 @@ flowchart TB
 | **Debian 12 (bookworm)** | ✅ **首选**：稳定、systemd、PostgreSQL 15 源内、LibreOffice/poppler/uv 齐全 |
 | **Ubuntu 22.04 / 24.04 LTS** | ✅ **首选**：与 Debian 同源，长期支持 |
 | **Windows 10/11（Docker Desktop）** | ✅ **支持**：WSL2 后端跑 Linux 容器，工具链全在镜像里，见[方式二](#方式二docker-compose-直跑ghcr-已发布镜像)的 Windows 说明 |
+| **macOS 13+（Apple Silicon / Intel）** | ✅ **支持**：预编译包直跑（需自装 PostgreSQL 与文档渲染依赖），见[方式三](#方式三下载预编译包linux--macosamd64-与-arm64)；工具链不全时「宿主环境」页如实显示缺失 |
 | Kali | ⚠️ 可用（开箱全套工具），但滚动更新有升级风险，生产环境不建议 |
 | RHEL / Rocky / CentOS Stream | ⚠️ 支持（dnf 路径），但 ffuf/sqlmap 新版等工具覆盖少，按需自装 |
 | Windows 原生（exe 直跑） | ❌ 不支持：特权助手/工具链/守护脚本均为 Linux 体系，请用 Docker Desktop 或 WSL2 |
@@ -425,18 +426,28 @@ docker compose -f docker-compose.yml -f docker-compose.windows.yml up -d
 - 升级：`docker compose pull && docker compose up -d`；卸载：`docker compose down -v`；
 - 回连端口映射示例见 `docker-compose.yml` 注释（reverse shell 需放开对应端口）。
 
-### 方式三：下载预编译包（Linux amd64 / arm64）
+### 方式三：下载预编译包（Linux / macOS，amd64 与 arm64）
 
-到 [Releases](https://github.com/chu0119/Pojun/releases) 下载
-`pojun-<版本>-linux-<架构>.zip`（附 SHA256SUMS），解压后：
+到 [Releases](https://github.com/chu0119/Pojun/releases) 下载对应平台包
+`pojun-<版本>-<平台>-<架构>.zip`（附 SHA256SUMS），解压后：
 
 ```bash
 cp config.example.json config.json   # 填好 database 连接
 ./start.sh                           # → http://localhost:8787
 ```
 
-> 用 `start.sh` 启动而非直接跑二进制——它是守护脚本，「一键更新」靠它完成换装。
-> 目前只适配 Linux；Windows/macOS 暂不支持。
+> 用 `start.sh` 启动而非直接跑二进制——它是守护脚本，「一键更新」靠它完成换装
+> （macOS 上的页面一键更新同样可用，按平台自动匹配发布包）。
+
+**macOS 补充说明：**
+
+- 依赖自装：`brew install postgresql@16 libheif poppler libreoffice` 并启动 PostgreSQL；
+  Node ≥ 20（Playwright MCP）与 `uv`（FOFA MCP）按需安装；
+- 渗透工具链（nmap/sqlmap/nuclei 等）用 `brew install` 按需装，没有的工具
+  「宿主环境」页会如实显示缺失——agent 会绕开缺失工具改用可用的；
+- 特权助手 `pojun-hostd` 与批量装工具是 Linux 体系，macOS 上不可用（影响：
+  「一键装齐」按钮不可用，其余功能完整）；
+- `masscan`/`nmap -sS` 等特权扫描需要 root/sudo，与 Linux 同理。
 
 ### 方式四：从源码编译
 

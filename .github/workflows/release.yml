@@ -37,6 +37,8 @@ jobs:
         include:
           - { goos: linux, goarch: amd64 }
           - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -64,6 +66,12 @@ jobs:
       - name: Smoke test Linux amd64 binary
         if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
         run: dist/pojun-linux-amd64/pojun -h
+      # darwin 产物在 ubuntu runner 上无法执行，验证 Mach-O 格式与内嵌前端存在
+      - name: Verify darwin binary format
+        if: startsWith(matrix.goos, 'darwin')
+        run: |
+          file "dist/pojun-${{ matrix.goos }}-${{ matrix.goarch }}/pojun"
+          file "dist/pojun-${{ matrix.goos }}-${{ matrix.goarch }}/pojun" | grep -q "Mach-O"
       - uses: actions/upload-artifact@v4
         with:
           name: pkg-${{ matrix.goos }}-${{ matrix.goarch }}

@@ -4,6 +4,31 @@
 
 ## [Unreleased]
 
+## [0.4.66] - 2026-11-12
+
+> macOS 支持：Release 新增 Darwin 双架构发布包，三端覆盖（Linux / macOS / Windows-Docker）。
+
+### 新增
+
+- **macOS 发布包**：Release 新增 `pojun-<版本>-darwin-amd64.zip`（Intel）与
+  `pojun-<版本>-darwin-arm64.zip`（Apple Silicon），SHA256SUMS 同步覆盖；
+  CI 对 darwin 产物验证 Mach-O 格式。本地交叉编译验证通过（Mach-O arm64，
+  内嵌前端与 Linux 包一致）。
+- **一键更新自动支持 macOS**：发布包按 `pojun-<版本>-<os>-<arch>.zip` 命名，
+  macOS 上的页面一键更新按平台自动匹配 darwin 包，无需任何额外配置。
+- **部署文档新增 macOS 章节**（docs/部署手册.md §0d）：brew 依赖清单、渗透工具
+  按需安装与缺失降级说明、hostd 不可用范围、Gatekeeper quarantine 处理。
+- README：平台徽章更新为 Linux | macOS | Docker；系统支持表新增 macOS 行；
+  方式三扩展为 Linux / macOS 双平台安装说明。
+- `build.sh` 默认发布目标扩展为 linux/amd64、linux/arm64、darwin/amd64、
+  darwin/arm64。
+
+### 说明
+
+- macOS 上主服务、引擎、情报、报告、MCP、一键更新全部可用；特权助手
+  （pojun-hostd 批量装工具）为 Linux 体系不可用，工具用 brew 按需自装，
+  缺失工具在「宿主环境」页如实显示；Windows 仍走 Docker Desktop 路径。
+
 ## [0.4.65] - 2026-11-12
 
 > Windows 支持：Docker Desktop 一条命令部署，工具链/报告链路/回连配置全部实测打通。
