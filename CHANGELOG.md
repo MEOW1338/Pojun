@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+## [0.4.65] - 2026-11-12
+
+> Windows 支持：Docker Desktop 一条命令部署，工具链/报告链路/回连配置全部实测打通。
+
+### 新增
+
+- **Windows 部署路径（Docker Desktop / WSL2）**：新增 `docker-compose.windows.yml`
+  覆盖配置——data 卷改用 named volume（NTFS bind mount 的小文件 I/O 实测慢约
+  两个数量级：500 个 4KB 文件写 ~108 倍 / 读 ~328 倍，流量与证据写入必须避开），
+  预映射回连端口 4444-4450。启动命令：
+  `docker compose -f docker-compose.yml -f docker-compose.windows.yml up -d`。
+- **部署手册新增 Windows 章节**（docs/部署手册.md §0c）：真机实测记录（v0.4.64 +
+  Docker Desktop 29：双容器 healthy / 容器内 nmap·sqlmap·nuclei·LibreOffice /
+  docx→PDF→PNG 报告链路 / FOFA MCP 握手 / 初始化登录全通）、回连接收器的
+  Windows 配法（manual 出口 + 宿主机局域网 IP + 防火墙放行）、数据备份与升级
+  命令。
+- **README**：系统支持表新增 Windows（Docker Desktop）行；方式二补充 Windows
+  启动命令与注意事项；明确 Windows 原生 exe 不支持及其原因。
+- 主 `docker-compose.yml` 头部加 Windows 用户指引注释。
+
+### 说明
+
+- Windows 上不提供原生二进制：特权助手（hostd）、apt 工具链、systemd 守护均为
+  Linux 体系，Docker 路径下镜像已内置全部工具（66 件）与文档渲染依赖，
+  Windows 宿主机无需安装任何工具链。
+
 ## [0.4.64] - 2026-11-10
 
 > 红队批次第二批：原生 HTTP 执行器与会话复用、PoC 脚手架、任务级后台作业、

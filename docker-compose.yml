@@ -1,3 +1,9 @@
+# Windows（Docker Desktop）用户请加 -f docker-compose.windows.yml 启动：
+#   docker compose -f docker-compose.yml -f docker-compose.windows.yml up -d
+# 它把 data/ 换成 named volume（NTFS bind mount 的小文件 I/O 实测慢约
+# 两个数量级，流量/证据写入会明显变卡），并放开回连端口映射。
+# 详见 docker-compose.windows.yml 头注释与 docs/部署手册.md 的 Windows 章节。
+
 services:
   postgres:
     image: postgres:16-alpine

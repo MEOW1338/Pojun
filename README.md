@@ -318,8 +318,10 @@ flowchart TB
 |---|---|
 | **Debian 12 (bookworm)** | ✅ **首选**：稳定、systemd、PostgreSQL 15 源内、LibreOffice/poppler/uv 齐全 |
 | **Ubuntu 22.04 / 24.04 LTS** | ✅ **首选**：与 Debian 同源，长期支持 |
+| **Windows 10/11（Docker Desktop）** | ✅ **支持**：WSL2 后端跑 Linux 容器，工具链全在镜像里，见[方式二](#方式二docker-compose-直跑ghcr-已发布镜像)的 Windows 说明 |
 | Kali | ⚠️ 可用（开箱全套工具），但滚动更新有升级风险，生产环境不建议 |
 | RHEL / Rocky / CentOS Stream | ⚠️ 支持（dnf 路径），但 ffuf/sqlmap 新版等工具覆盖少，按需自装 |
+| Windows 原生（exe 直跑） | ❌ 不支持：特权助手/工具链/守护脚本均为 Linux 体系，请用 Docker Desktop 或 WSL2 |
 
 **硬件**：最低 2 核 4G / 20G 磁盘（不含工具）；**推荐 4 核 8G / 60G**（含 SecLists
 约 2.5G、nuclei 模板、Playwright chromium、LibreOffice）。
@@ -365,6 +367,25 @@ git clone --depth 1 https://github.com/chu0119/Pojun.git pojun && cd pojun
 cp .env.example .env      # 至少改 POSTGRES_PASSWORD；POJUN_TAG 可钉到具体版本（如 v0.4.64）
 docker compose up -d      # → http://localhost:8787
 ```
+
+**Windows（Docker Desktop，WSL2 后端）**：
+
+```powershell
+git clone --depth 1 https://github.com/chu0119/Pojun.git pojun; cd pojun
+copy .env.example .env    # 至少改 POSTGRES_PASSWORD
+docker compose -f docker-compose.yml -f docker-compose.windows.yml up -d
+# → http://localhost:8787
+```
+
+- Windows 加 `-f docker-compose.windows.yml` 的原因：data 卷改为 named volume
+  （NTFS bind mount 的小文件 I/O 实测慢约两个数量级，流量/证据写入会明显变卡），
+  并预映射回连端口 4444-4450；
+- **回连接收器**：容器内 direct 模式解析出的 LHOST 是容器网段 IP，外部目标连不到——
+  在「监听器 / C2」页把出口形态设为 **manual**、地址填 Windows 宿主机的局域网 IP
+  （`ipconfig` 查看），监听端口与映射端口 1:1 对应；Windows 防火墙放行对应端口；
+- 数据备份：`docker run --rm -v <项目名>_pojun-data:/data -v "%cd%:/backup" alpine tar czf /backup/pojun-data.tgz -C /data .`；
+- 其余与 Linux 相同：镜像内置全部渗透工具 / LibreOffice / Playwright，无需在
+  Windows 宿主机安装任何工具链。建议 Docker Desktop 分配 ≥8G 内存。
 
 - 镜像 `ghcr.io/chu0119/pojun`，amd64/arm64 双架构，`POJUN_TAG` 默认 `latest`；
   渗透工具随镜像内置（与二进制 `--with-tools` 同一套）：nmap / masscan /
