@@ -75,10 +75,10 @@ jobs:
           code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/health)
           [ "$code" = "200" ] || { echo "health=$code"; tail -50 ~/pojun/pojun.launchd.log; exit 1; }
           echo "health 200 OK"
-          # 数据库角色与库
+          # 数据库角色与库（psql 默认连用户同名库，runner 用户 runner 没有同名库）
           PGBIN="$(brew --prefix)/opt/postgresql@16/bin"
-          "$PGBIN/psql" -tAc "SELECT 1 FROM pg_roles WHERE rolname='pojun'" | grep -q 1
-          "$PGBIN/psql" -tAc "SELECT 1 FROM pg_database WHERE datname='pojun'" | grep -q 1
+          "$PGBIN/psql" -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='pojun'" | grep -q 1
+          "$PGBIN/psql" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='pojun'" | grep -q 1
           # config.json 权限
           [ "$(stat -f '%Lp' ~/pojun/config.json)" = "600" ]
 
