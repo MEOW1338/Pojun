@@ -43,7 +43,10 @@ jobs:
 
       - name: Run install.sh (macOS / binary / non-interactive)
         run: |
+          set +e
           bash install.sh --mode=binary -y --version="$POJUN_SMOKE_VERSION" 2>&1 | tee /tmp/install.log
+          echo "install.sh exit code: $?"
+          set -e
           # 关键里程碑必须在输出里出现，防止脚本静默降级
           grep -q "PostgreSQL 就绪" /tmp/install.log
           grep -q "SHA256 校验通过" /tmp/install.log

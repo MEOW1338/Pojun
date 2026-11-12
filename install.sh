@@ -1311,7 +1311,8 @@ persist_install_proxy
 
 # ── 健康检查 ─────────────────────────────────────
 PORT="${LISTEN_ADDR##*:}"
-for _ in $(seq 1 30); do
+for _n in $(seq 1 30); do
+  # 每轮失败打进度：装机现场「卡在哪一步」必须可见，也方便排障
   if curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/api/health" 2>/dev/null; then
     HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
     ok "服务已就绪 → http://${HOST_IP:-127.0.0.1}:${PORT}（首次访问设置管理员密码）"
@@ -1328,6 +1329,7 @@ for _ in $(seq 1 30); do
     fi
     exit 0
   fi
+  info "等待服务就绪 (${_n}/30)..."
   sleep 2
 done
 if [ "$MODE" = "binary" ]; then
