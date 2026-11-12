@@ -694,6 +694,8 @@ deploy_binary_darwin(){
   for i in $(seq 1 30); do pg_isready -q >/dev/null 2>&1 && break; sleep 2; done
   pg_isready -q >/dev/null 2>&1 || die "PostgreSQL 60s 内未就绪（brew services list 看状态）"
   ok "PostgreSQL 就绪"
+  # psql 不带 -d 时默认连「与当前用户同名」的库（通常不存在）——显式钉到 postgres
+  export PGDATABASE=postgres
 
   fetch_release
   local src="$TMP/unpack/pojun-${VERSION#v}-${PKG_ARCH}"
