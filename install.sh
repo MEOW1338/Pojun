@@ -152,7 +152,7 @@ command -v curl >/dev/null 2>&1 || die "curl 安装失败，请手动安装"
 # 两大发行版的 CA 包位置都判一下，缺哪个补哪个；装不上也不阻断（真实新
 # 机器几乎都自带，这里只兜极端裁剪过的系统）。
 # macOS 的系统证书在 /etc/ssl/cert.pem（随系统自带），Linux 才需要下面的兜底安装
-if [ "$IS_MAC" != "1" ] \
+if [ "$IS_MAC" != "1" ] && \
    [ ! -e /etc/ssl/certs/ca-certificates.crt ] && [ ! -e /etc/pki/tls/certs/ca-bundle.crt ]; then
   info "未检测到 CA 证书包，尝试安装 ca-certificates..."
   if command -v apt-get >/dev/null 2>&1; then
@@ -1313,7 +1313,12 @@ persist_install_proxy
 PORT="${LISTEN_ADDR##*:}"
 for _n in $(seq 1 30); do
   # 每轮失败打进度：装机现场「卡在哪一步」必须可见，也方便排障
-  if curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/api/health" 2>/dev/null; then
+  # curl 的退出码显式捕获：set -e 下 if 条件本应豁免，但显式 rc 让「为什么退出」
+  # 直接可见（曾在此处出现无输出退出的怪象，靠这行定位）
+  health_rc=0
+  curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/api/health" 2>/dev/null || health_rc=$?
+  echo "[*] health check #${_n}: rc=${health_rc}"
+  if [ "$health_rc" = "0" ]; then
     HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
     ok "服务已就绪 → http://${HOST_IP:-127.0.0.1}:${PORT}（首次访问设置管理员密码）"
     info "下一步：①设置管理员密码 ②「LLM 配置」配通道 ③「系统→MCP」用预设接入 FOFA/Playwright ④建任务可套用内置 Playbook"
