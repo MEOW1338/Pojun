@@ -4,6 +4,40 @@
 
 ## [Unreleased]
 
+## [0.4.67] - 2026-11-12
+
+> macOS 一键安装：install.sh 原生支持 Darwin 分支，GitHub macos-15 真机全流程冒烟通过。
+
+### 新增
+
+- **install.sh 支持 macOS**：检测 Darwin 后自动走 Homebrew 分支——PostgreSQL 16
+  安装与服务化（brew services = launchd）、Release darwin 包下载与 SHA256 校验、
+  config.json 生成、launchd 用户级服务注册（开机自启 + KeepAlive 崩溃自动拉起，
+  复用 start.sh 现有守护逻辑）。macOS 全程当前用户执行，不需要 sudo；
+  默认安装目录 `$HOME/pojun`。
+- **macOS 真机冒烟 workflow**（.github/workflows/macos-install-smoke.yml）：
+  macos-15（Apple Silicon）runner 上跑 install.sh 全流程——health 200、
+  launchd 服务状态、数据库角色/库、config.json 权限 600、幂等重跑（升级不覆盖
+  配置）、KeepAlive 杀进程自动复活——全部断言通过。
+- install.sh 健康检查循环增加进度输出（等待服务就绪 n/30），装机现场卡步可见。
+
+### 修复（macOS 冒烟暴露的兼容问题）
+
+- `${REPO,,}` 小写展开改 tr：macOS 自带 bash 3.2 不支持该特性；
+- CA 证书检查：macOS 系统证书在 `/etc/ssl/cert.pem`（随系统自带），不再误报缺失；
+- `psql` 默认连接用户同名库（通常不存在）：Darwin 分支显式 `PGDATABASE=postgres`；
+- `local A=1 B=$A` 同行声明在 `set -u` 下引用未定义变量：拆行；
+- `hostname -I` 是 Linux 特有：macOS 上该管道补 `|| true`——此前会导致
+  health 200 后脚本被 `set -e` 静默杀掉；
+- CA 检查行的 `\` 续行补 `&&`：bash 3.2 会把 `if [ A ] \ [ B ]` 并成一条
+  `[` 命令报参数过多。
+
+### 说明
+
+- macOS 一键命令与 Linux 同款：`curl -fsSL .../install.sh | bash`（无 sudo）；
+  README 快速开始与部署手册已同步。Windows 仍走 Docker Desktop 路径。
+
+
 ## [0.4.66] - 2026-11-12
 
 > macOS 支持：Release 新增 Darwin 双架构发布包，三端覆盖（Linux / macOS / Windows-Docker）。
