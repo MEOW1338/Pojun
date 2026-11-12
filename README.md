@@ -1,107 +1,266 @@
 <div align="center">
 
+<img src="screenshots/pojun-logo.png" width="96" alt="Pojun"/>
+
 # 破军 Pojun
 
-**AI 自主渗透测试 · 红队作战平台**
+**AI 自主渗透测试平台 · 从一句话目标到可交付漏洞报告**
 
 > 破军，北斗第七星，主杀伐、主变局。<br/>
-> 名字取自它，因为这套系统做的事正是「找到防线的破口，并把破口证明给你看」。
+> 找到防线的破口，并把破口证明给你看。
 
-Go 单体后端（内嵌 Next.js 前端）· PostgreSQL · 多 Agent 自主推进 · 全程证据留痕
-
-[![Release](https://img.shields.io/github/v/release/chu0119/Pojun?include_prereleases&label=release)](https://github.com/chu0119/Pojun/releases)
+[![Release](https://img.shields.io/github/v/release/chu0119/Pojun?label=%E7%89%88%E6%9C%AC&color=red)](https://github.com/chu0119/Pojun/releases)
 [![CI](https://github.com/chu0119/Pojun/actions/workflows/ci.yml/badge.svg)](https://github.com/chu0119/Pojun/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
-![Platform](https://img.shields.io/badge/platform-linux-lightgrey)
+![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%2F%20arm64-lightgrey)
+![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?logo=docker&logoColor=white)
 
-📦 **Docker**：`ghcr.io/chu0119/pojun`（amd64 / arm64 双架构，每版 CI 自动发布）
-🧠 **单技能版**：[pojun-skill](https://github.com/chu0119/pojun-skill)——Pojun 方法论的单 skill 版，任意 AI Agent 即装即用
+**Go 单体后端** · **Next.js 内嵌前端** · **PostgreSQL** · **多 Agent 自主推进** · **全程证据留痕**
+
+📦 [一条命令安装](#-快速开始) · 🧠 [单技能版 pojun-skill](https://github.com/chu0119/pojun-skill) —— 本平台方法论的单 skill 版，任意 AI Agent 即装即用
 
 </div>
 
 ---
 
-## 名字与来历
+## 目录
 
-本项目最初是 **ARTEX**：fork 自已删除的原作者项目 `Autumn-27/ARTEX`（基于其最终
-定版 v0.3.15）。接手的第一个版本是 v0.3.15 的修复与加固；此后 v0.3.16 以来
-**725+ 提交、约 5 万行新增**全部由本仓库维护者完成，覆盖了原作者版本没有的
-整条能力线（漏洞情报运营、红队作战、证据附件、公文级报告、模型路由……）。
-
-2026-11-02 起项目正式改名 **破军 / Pojun**（`pojun`）：代码标识、二进制
-（`pojun` / `pojun-hostd` / `pojun-maint`）、安装目录（`/opt/pojun`）、环境变量
-（`POJUN_*`）、镜像（`ghcr.io/chu0119/pojun`）全部切换。旧名 ARTEX 与旧路径
-仅作为来源说明与登录用户名兼容保留；原作者代码保留在 git 历史里作为起点。
+- [这是什么](#这是什么)
+- [界面速览](#界面速览)
+- [核心能力](#核心能力)
+- [系统架构](#系统架构)
+- [快速开始](#快速开始)
+- [配置速查](#配置速查)
+- [内置资产清单：技能 / MCP / 工具](#内置资产清单技能--mcp--工具)
+- [与同类项目的差异](#与同类项目的差异)
+- [实战纪律与安全边界](#实战纪律与安全边界)
+- [开发与贡献](#开发与贡献)
+- [文档索引](#文档索引)
+- [来源声明](#来源声明)
+- [许可与免责声明](#许可与免责声明)
 
 ---
 
 ## 这是什么
 
-Pojun 是一套 **LLM 多 Agent 自主渗透测试平台**：你给一句话目标，它自动完成
+Pojun 是一套 **LLM 多 Agent 自主渗透测试平台**：给一句话目标，它自动完成
 「目标拆解 → 侦察 → 漏洞挖掘 → 利用 → 后渗透 → 报告」全流程，人随时可以插手纠偏。
 
-与本仓库**前一版本**（接手自已删除的原作者项目 `Autumn-27/ARTEX`，基于其最终定版
-v0.3.15）相比，现在的 Pojun 已经是**完全独立演进的新项目**——原作者的代码留在
-git 历史里作为起点，v0.3.16 以来的 **725+ 提交、约 5 万行新增**全部由本仓库的
-维护者完成，覆盖了原作者版本没有的整条能力线：
+它不是一个「包一层 API 的扫描器」。Pojun 的核心设计是**让 AI 像一个守纪律的渗透测试工程师一样干活**：
 
-| 能力线 | 本版本做了什么 |
-|---|---|
-| **漏洞情报运营** | NVD / CISA KEV / GitHub Advisory / PoC 聚合 / nuclei 模板联动 / 资产指纹→CVE 反向匹配 / **近期高危快通道**（30 分钟一轮）——原作者版本完全没有情报层 |
-| **红队作战** | TCP 回连接收器（接住反弹 shell 并留证）/ **C2 出口三形态**（direct / SSH 中继托管 / manual，**UI 管理页**：监听器启停/会话捕获可视化）/ redteam-ops 后渗透方法论 skill / 9 件后渗透工具（socat/proxychains/ligolo/linpeas/pspy/evil-winrm…） |
-| **安全与合规** | 登录防爆破（IP 锁定+全局限流）/ 探活端点去指纹 / 改密码即吊销全部会话 / 安全响应头 / 认证面无产品名——**公网部署基线** |
-| **工程可靠性** | LLM 三通道轮询（熔断+故障转移+用量归因）/ 拆解墙钟 / planner 双保险 / 任务收官 / **自动收尾判据**（目标闭环、连续 N 轮无新增、覆盖率阈值、最大规划轮数，可在设置页调）/ 一键更新（校验+回滚） |
-| **工具与交付** | 宿主工具 63 件**一键装齐** / 漏洞 19 类标准枚举 / **专业级 Word 报告**（封面·目录·页眉页脚·严重度着色·复测记录·流量证据·修复路线图）/ **证据附件**（截图 + Word/Excel/PPT/PDF 取样转图片，任务内隔离、可归属漏洞）/ 证据版本化+sha256 校验 / 手机端适配 |
-| **Agent 推理** | **意图假设与成功判据**（hypothesis/success_criteria）/ worker 五步作业框架+绕过清单 / stop_reason 进态势（接续归因不再靠猜）/ **意图墙钟遥测** / Guard 归因回流 planner / 续跑摘要与零写回复盘 / **按角色配模型**（模型路由策略文档化） |
-| **证据可信与自动归属** | **机械验证凭据闸门**（critical/high 必须附 HTTP 状态码/curl/工具命中输出等可机械复现凭据，纯版本匹配拦截降级——「可能存在」不是 finding）/ **L1-L4 证据分级**（critical/high 需 L3+ 篇幅门槛）/ 证据源核验（evidence 与工具输出逐行比对）/ **证据自动归属**（report_finding 回溯绑定同一意图产物 + 附件宿主/域名自动匹配）/ **事实自动锚定**（fact 文本中的 URL/主机自动挂资产图）/ **公司自动归属**（按范围资产分布推断） |
-| **技能与 MCP** | **21 个内置 skill**：SRC 方法论库（48 篇测试知识 + 11 篇流程规则，按需加载）/ 攻击面侦察 / Web 攻击 / API 安全 / 云 / 域 / 源码审计 / 0day / AI 应用 / 移动逆向 / 合约 / 无线 / 后渗透 / OPSEC / 验证与报告规范；**9 个 MCP 预设**一键添加（FOFA 资产测绘含 one-fox 通道、Playwright、Chrome DevTools、Burp、Fetch、Sequential Thinking、Memory、Filesystem、Context7）；skill 默认绑定到对应角色，不用手工配置 |
-| **数据在线查看** | **数据文件在线阅读器**（JSON/JSONL/CSV/TSV/文本转表格，.gz 自动解压重分类，API 信封自动下钻 data 数组）/ **智能关联**（附件按宿主/域名自动匹配漏洞与资产）/ **图片滚轮缩放预览**（0.5x–8x 缩放·拖拽平移·双击还原，任务总览/漏洞详情/文档分页全接入）/ **批量 Word 导出**（一漏洞一 docx 打包 zip）/ **明文保真口径**（第一方证据递交官方不打码不脱敏） |
-| **成本与覆盖** | **http_probe 批量探活**（一次往返替代逐条 curl，响应压成一行摘要）/ **覆盖归账**（record_fact 从文本自动锚定资产）/ **未测资产按簇排序**（静态沉底、同前缀相邻）/ **worker 态势瘦身**（规划专用字段不进 worker 对话）/ LLM 用量按角色聚合 / 瞬时取消自动重试 |
+- **目标闸门**——每个目标必须带可核验的验收标准（`whoami` 返回 `uid=0`、改价后回读订单），
+  全部目标经证明达成才允许任务收官；未完成就标「未完成」，报告里如实呈现，绝不假装跑完了。
+- **证据闸门**——critical/high 漏洞必须附可机械复现的证据（HTTP 状态码、命令命中输出、
+  流量对比），纯版本匹配的「可能存在」进不了交付报告。
+- **自主续跳**——确认漏洞 ≠ 完成意图。发现 high/critical 只到「漏洞存在」时，平台自动派发
+  下一跳利用链意图（凭据→横向、注入→dump→登录、上传→webshell），推进到 L4 数据/资金影响层。
+- **全程留痕**——所有 HTTP/S 流量过 MITM 代理逐请求留存，发现绑定流量证据，
+  每一步 activity 可回放，「这个结论是怎么得出的」全程可回溯。
 
-原作者版本有的核心（双图架构、planner/worker 编排、MITM 流量代理、审批门）全部
-保留并在其上加固；下文详述。
+单机实测基线（真实授权项目数据，Kali 部署）：12 个任务、56,000+ 次工具调用、
+**295 个确认漏洞**（严重 28 / 高危 140）、2,752 个资产节点，全程无人值守。
 
 ---
 
 ## 界面速览
 
-> 以下截图来自真实运行实例，目标域名、主机地址、人员与凭据等敏感信息均已脱敏。
+> 以下截图来自真实运行实例，目标域名、企业名称、IP 与漏洞细节均已脱敏。
 
-**入口与全局态势**
+**全局态势**
 
-| 控制台登录（首次启动初始化管理员） | 总览：任务 / 漏洞 / 资产 / Token 消耗 |
+| 控制台登录：首次启动初始化管理员，防爆破锁定 | 总览：任务 / 发现 / 资产 / Token 全局态势与趋势 |
 | :---: | :---: |
 | ![登录](screenshots/pojun-login.png) | ![总览](screenshots/pojun-dashboard.png) |
-
-**任务与资产**
-
-| 任务列表：目标进度、漏洞分布一屏可见 | 资产覆盖图：力导向布局，已测节点高亮 |
-| :---: | :---: |
-| ![任务列表](screenshots/pojun-tasks.png) | ![资产覆盖图](screenshots/pojun-assets-graph.png) |
-
-**证据与报告（SRC 交付的关键）**
-
-| 证据附件：截图 / 数据样本自动归档、缩略图预览 | 漏洞详情：摘要 + 现场截图 + PoC + 复测入口 |
-| :---: | :---: |
-| ![证据附件](screenshots/pojun-evidence.png) | ![漏洞详情](screenshots/pojun-finding-detail.png) |
-
-| 现场截图：按漏洞归档，Word 报告自动嵌图 |
 | :---: |
-| ![现场截图](screenshots/pojun-finding-shots.png) |
+| ![总览](screenshots/pojun-dashboard.png) |
+
+**任务执行**
+
+| 任务列表：目标进度与漏洞分布一屏可见 | 任务详情：多 Agent 会话，planner 态势研判实时可见 |
+| :---: | :---: |
+| ![任务列表](screenshots/pojun-tasks.png) | ![任务详情](screenshots/pojun-task-detail.png) |
+
+| 任务总览：目标逐条带验收标准，达成状态诚实呈现 |
+| :---: |
+| ![任务总览](screenshots/pojun-task-overview.png) |
+
+**发现与证据**
+
+| 发现：跨任务漏洞汇总，按严重度统计 | 漏洞详情：摘要 + 复测命令 + 证据 PoC + 状态卡 |
+| :---: | :---: |
+| ![发现](screenshots/pojun-findings.png) | ![漏洞详情](screenshots/pojun-finding-detail.png) |
+
+| 资产台账：企业 → 根域名/IP/子域/服务/接口 全量登记 | 资产覆盖图：力导向布局，已测节点高亮 |
+| :---: | :---: |
+| ![资产](screenshots/pojun-assets.png) | ![资产覆盖图](screenshots/pojun-assets-graph.png) |
+
+| 全局流量代理：所有 HTTP/S 往来逐请求留存 |
+| :---: |
+| ![流量](screenshots/pojun-traffic.png) |
+
+**证据与交付**
+
+| 证据附件：截图 / 数据样本自动归档、缩略图预览 | 现场截图：按漏洞归档，Word 报告自动嵌图 |
+| :---: | :---: |
+| ![证据附件](screenshots/pojun-evidence.png) | ![现场截图](screenshots/pojun-finding-shots.png) |
 
 **平台配置**
 
-| Agent 清单：8 个内置角色 + 自定义 | 宿主环境：63 件工具体检 + 一键装齐 |
+| 漏洞情报运营：42 万 CVE / KEV 在野利用 / PoC 仓库持续同步 | 技能库：22 个内置方法论技能，按需加载 |
 | :---: | :---: |
-| ![Agent](screenshots/pojun-agents.png) | ![宿主环境](screenshots/pojun-hostenv.png) |
+| ![漏洞情报](screenshots/pojun-vulnintel.png) | ![技能库](screenshots/pojun-skills.png) |
 
-| LLM 配置：多通道轮询 / 熔断 / 按角色路由 |
-| :---: |
-| ![LLM](screenshots/pojun-llm.png) |
+| MCP 预设：FOFA 测绘 / Playwright / Burp 等一键接入 | Agent 角色：按角色配模型与可见性 |
+| :---: | :---: |
+| ![MCP](screenshots/pojun-mcp.png) | ![Agent](screenshots/pojun-agents.png) |
+
+| LLM 配置：多通道轮询 / 熔断 / 故障转移 | 宿主环境：66 件工具体检 + 一键装齐 |
+| :---: | :---: |
+| ![LLM](screenshots/pojun-llm.png) | ![宿主环境](screenshots/pojun-hostenv.png) |
+
+| 监听器 / C2：反弹 shell 回连接收与出口管理 | 对话工作台：跨 Agent 对话与工具触发回放 |
+| :---: | :---: |
+| ![C2](screenshots/pojun-c2.png) | ![对话](screenshots/pojun-chat.png) |
+
+| 系统设置：目标收尾 / 写回守卫 / 跨任务去重等开关 | 领域工具：agent 可调用的平台工具清单与开关 |
+| :---: | :---: |
+| ![设置](screenshots/pojun-settings.png) | ![工具](screenshots/pojun-tools.png) |
 
 ---
 
-## 核心设计
+## 核心能力
+
+### 1. 多 Agent 自主推进
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant EV as 图变更(800ms 防抖)
+  participant P as planner（每轮新会话）
+  participant FR as frontier 意图队列
+  participant W as worker ×N
+  EV-->>P: 唤醒（边沿/心跳）
+  P->>FR: add_intent 派 0..4 个意图（带锚定资产）
+  W->>FR: CAS 领取意图
+  W->>W: 真实工具执行（全部过 MITM 留痕）
+  W->>EV: 写回 fact/asset/finding + 每步 activity
+  EV-->>P: 图变更 → 下一轮（闭环）
+```
+
+- **planner** 是唯一意图生成者，持有一份跨唤醒共享的 todolist——串行利用链
+  （注入点→凭据→横向）记录一次、按依赖逐步派发，不重复不错序。
+- **worker** 做完一条意图即停；结果写回双图后自动唤醒 planner。
+- **mainagent** 接管对话、报告补写、工具触发的即时任务（如复测提醒）。
+- **人在环路**：对话纠偏 / 意图暂停取消 / 人工审批 / `steer_work` 实时纠偏，
+  每步 activity 在 UI 内联可见。
+- 多层韧性：空转收场（nudge 3 轮 + prevent 5 轮 + 取消原因落库）/ 拆解墙钟 /
+  规划轮超时 / 瞬时故障自动重跑——免费限流通道也能稳定跑完任务。
+
+### 2. 目标管理：完成判定不可被绕过
+
+- `set_goals` 支持每条目标带 `criteria`（可核验验收标准），目标拆解提示词强制
+  产出 criteria（如「`whoami` 返回 `uid=0`」「测试订单改价后回读」）。
+- **`goal_met` 闸门**：还有目标未 `met` 时，整体收官直接被拒绝（附未达成目标 id）。
+- **诚实终态**：只有全部目标达成才落 `done`；有未达成目标时，无论超时 / 自动空转 /
+  覆盖度收尾，终态一律 `timeout`（未完成），列表/详情/报告三处如实标注 `x/y 目标`。
+- Word/Markdown 报告新增「目标达成情况」小节，逐条列出已达成/未达成及验收标准。
+
+### 3. 执行面：原生执行器 + 会话复用 + 后台作业
+
+| 能力 | 说明 |
+|---|---|
+| `http_request` | 原生 HTTP 执行器：方法/头/体/重定向/超时可控，自动过 MITM 留痕 |
+| `session_login` | 五形态登录（表单/JSON/Basic/Bearer/自定义），任务级 cookie jar 与 curl 互通 |
+| 会话复用 | `http_request(session=同名)` 自动带登录态；双身份对照做越权零成本 |
+| `poc_scaffold` | 按类别（sqli/ssti/lfi/ssrf/idor/jwt/upload/cmdi/race）生成可运行 Python 验证骨架 |
+| `job_start/status/output/stop` | 后台作业：长扫描/爆破放后台跑，run 结束进程继续，结果随时取回 |
+| `save_script` / `run_script` | 任务级共享脚本目录：一次编写，全任务复用 |
+
+### 4. 攻击链续跳：确认漏洞之后继续走
+
+- `report_finding` 回执带 `chain_intent_id`——平台按漏洞类别自动派发继任意图：
+  - SQL 注入 → 数据外带验证 → 登录态获取 → 后台横向
+  - 文件上传 → 落地验证 → webshell 能力边界确认
+  - 未授权接口 → 越权对照 → 数据面影响评估
+- worker 纪律（代码注入提示，不受前端词表编辑影响）：确认漏洞 ≠ 完成意图；
+  按影响层级 L1 信息 → L2 认证/越权 → L3 控制 → L4 数据/资金 推进；
+  判「不可利用」前必须换过 ≥2 种本质不同手段并留下失败输出。
+
+### 5. 漏洞去重与合并：一份漏洞一份真相
+
+- **多键去重**：每条 finding 带 cve / root / endpoint / param 强键 +
+  asset_class / name 弱键，新上报自动命中合并目标，`merge_count` 计数、
+  来源 finding 收进 `finding_updates` 时间线，证据与资产锚点保留并集。
+- **跨任务去重**：同资产同漏洞在别的任务已报过时，默认不重复打扰（可关）。
+
+### 6. 写回守卫：范围越界的硬防线
+
+- `record_fact` / `report_finding` 锚定非本任务自有范围的资产时直接拒绝
+  （own / source / foreign 三分类，来源任务范围只读共享）。
+- planner 侧配套「复核优先」硬尾巴：跨域名归属结论必须先双域取证复核，
+  复核不过立即放弃该链——防止一次误报的关联导致整条链跑偏。
+
+### 7. 漏洞情报运营（持续，不是静态知识库）
+
+多数同类产品的情报是「按组件查」；Pojun 做的是「**按时间流**」——
+**最近 7 天爆了什么 → 匹配我的资产 → 排进任务**：
+
+- NVD 全量/增量（实测库 42 万+）+ **CISA KEV 在野利用** + GitHub Advisory
+  + GitHub PoC 聚合（实测库 1,400+）
+- **近期高危快通道**：按发布时间每 30 分钟拉 CVSS≥9.0 或 KEV，几十分钟进库
+- **资产指纹→CVE 反向匹配**：同步的 CVE 自动匹配资产 technologies 指纹，
+  命中即向任务挂 hint
+- **版本区间精确判定**：`search_vulns` 返回 `version_in_range` 三态；
+  NVD 不填区间时 GHSA 补（保守判定：解析不出→「可能受影响」）
+
+### 8. 红队作战能力
+
+- **回连接收器**：接住反弹 shell / OOB 回连，逐会话记录来源、时间、捕获内容；
+  REST + agent 工具双入口；启停走人工审批。
+- **C2 出口三形态**：direct（本机可达）/ SSH 中继托管（无公网+公网中转机，
+  断线自动重连）/ manual（已有手工转发）。`listener_start` 返回解析后的
+  回连地址，agent 直接填 payload，无需自行判断网络形态。
+- **后渗透方法论**：redteam-ops skill 六阶段（落地稳定化→提权→权限保持→凭据
+  获取→横向移动→数据获取回传→收尾）+ 证据纪律。
+- **后渗透工具**：impacket / netexec / evil-winrm / chisel / ligolo-ng /
+  proxychains / socat / linpeas / pspy / responder / sqlmap / hydra / hashcat /
+  nuclei / ffuf … 66 件在「宿主环境」页一键装齐（特权助手 pojun-hostd 串行排队）。
+
+### 9. 审批与拦截：三层闸门
+
+| 层 | 语义 | 内置规则 |
+|---|---|---|
+| 明令禁止 `deny` | 任何语境都不可逆且无合法渗透用途——不调模型直接拒 | 10 条 |
+| 交 Agent 研判 `judge` | 作用对象取决于上下文（删测试表 vs 删生产表）——命中后走模型裁决 | 12 条 |
+| 人工确认 `ask` | 平台能力边界变更（如开监听端口）——转人工审批 | 1 条 |
+
+- 规则级 timeout 真生效（研判类 90s/allow，硬禁类 30s/deny）；
+- 模型裁决**严格 JSON 解析**（解析失败走失败策略，绝不猜）；
+- 反注入边界：裁判输入刻意收窄（仅工具名+参数+工作目录），历史不进裁判视野；
+- **写回范围守卫**（见 §6）在数据层再兜一道。
+
+### 10. 全程证据链与交付
+
+- **MITM 记录代理**：worker 的全部 HTTP/S 流量逐请求留存（CA 签发留痕）；
+- **发现绑定流量**：finding 绑定 baseline / proof / verification / supporting
+  四类流量证据，快照版本化（sha256），报告引用可验证；
+- **证据附件**：截图 + Word/Excel/PPT/PDF 取样自动转图归档，任务内隔离、可归属漏洞；
+- **报告导出**：专业级 Word（封面·目录·页眉页脚·严重度着色·复测记录·流量证据·
+  修复路线图，手写 OOXML 零依赖）+ Markdown + 批量「一漏洞一 docx」zip；
+- **对抗式自检**：换身份/换参数顺序/换客户端复现——「确认了才报」。
+
+### 11. 成本与模型路由
+
+- **LLM 三通道轮询**：熔断 + 故障转移 + 用量归因，免费限流通道也能跑完任务
+  （实测 2,725M token，缓存命中率 93%）；按角色配模型：planner 强推理 /
+  worker 中推理 / judge 便宜档。
+- **worker 态势瘦身**：规划专用字段不进 worker 对话；**未测资产按簇排序**
+  静态沉底；**http_probe 批量探活**一次往返替代逐条 curl。
+
+---
+
+## 系统架构
 
 ### 双图架构：资产图 × 探索图
 
@@ -130,100 +289,30 @@ flowchart LR
   FD -.->|anchor| EP
 ```
 
-### 多 Agent 自主推进
+### 一次任务的完整生命周期
 
 ```mermaid
-sequenceDiagram
-  autonumber
-  participant EV as 图变更(800ms 防抖)
-  participant P as planner（每轮新会话）
-  participant FR as frontier 意图队列
-  participant W as worker ×N
-  EV-->>P: 唤醒（边沿/心跳）
-  P->>FR: add_intent 派 0..4 个意图（带锚定资产）
-  W->>FR: CAS 领取意图
-  W->>W: 真实工具执行（Bash/HTTP 全程过 MITM 留痕）
-  W->>EV: 写回 fact/asset/finding + 每步 activity
-  EV-->>P: 图变更 → 下一轮（闭环）
+flowchart TB
+  T["新建任务（一句话目标 + 范围）"] --> GD["目标拆解：LLM 产出 goals + criteria"]
+  GD --> LOOP{引擎闭环}
+  LOOP -->|"planner 派意图"| FR["frontier 意图队列"]
+  FR -->|"CAS 领取"| W["worker ×N 执行"]
+  W -->|"fact / asset / finding"| LOOP
+  W -->|"high/critical 确认"| CH["攻击链续跳：自动派继任意图"]
+  CH --> LOOP
+  W -->|"同类漏洞命中"| DD["多键去重：合并进既有 finding"]
+  DD --> LOOP
+  LOOP -->|"全部目标 met"| DONE["done（可交付）"]
+  LOOP -->|"目标未全达 + 触发收尾"| TO["timeout（未完成，如实标注）"]
+  DONE --> REP["Word / Markdown 报告 + 目标达成情况 + 复测入口"]
 ```
-
-- **planner** 是唯一意图生成者，持有一份跨唤醒共享的 todolist——串行利用链
-  （注入点→凭据→横向）记录一次、按依赖逐步派发，不重复不错序。
-- **worker** 做完一条意图即停；结果写回双图后自动唤醒 planner。
-- **空转收场 / 拆解墙钟 / 规划轮超时 / model_error 重跑** 多层韧性：免费限流
-  通道也能稳定跑完任务（三通道轮询 + 故障转移 + 熔断实测）。
-- **人在环路**：对话纠偏 / 意图暂停取消 / 人工审批 / `steer_work` 实时纠偏，
-  每步 activity 在 UI 内联可见。
-
-### 漏洞情报运营（持续，不是静态知识库）
-
-多数同类产品的情报是「按组件查」；Pojun 做的是「**按时间流**」——
-**最近 7 天爆了什么 → 匹配我的资产 → 排进任务**：
-
-- NVD 全量/增量 + **CISA KEV 在野利用** + **GitHub Advisory**（版本区间第二来源）
-  + GitHub PoC 聚合
-- **近期高危快通道**：按发布时间每 30 分钟拉 CVSS≥9.0 或 KEV，几十分钟进库
-- **资产指纹→CVE 反向匹配**：同步的 CVE 自动匹配资产 technologies 指纹，
-  命中即向任务挂 hint
-- **版本区间精确判定**：`search_vulns` 返回 `version_in_range` 三态；
-  NVD 不填区间时 GHSA 补（保守判定：解析不出→「可能受影响」）
-
-### 红队作战能力
-
-```mermaid
-flowchart LR
-  subgraph L["回连接收器 listener"]
-    L1["listener_start<br/>接住反弹 shell/OOB"]
-    L2["逐会话捕获<br/>来源/时间/内容 64KB"]
-    L3["listener_sessions<br/>会话留证"]
-  end
-  subgraph E["C2 出口三形态（可选）"]
-    E1["direct<br/>本机可达"]
-    E2["ssh 中继<br/>无公网+公网中转机<br/>SSH -R 自动托管"]
-    E3["manual<br/>已有手工转发"]
-  end
-  E --> L1
-```
-
-- **回连接收器**：接住反弹 shell / OOB 回连，逐会话记录来源、时间、捕获内容；
-  REST + agent 工具双入口；启停走人工审批（ask）。
-- **C2 出口配置**：本机有公网→direct；无公网+公网中转机→SSH 反向隧道平台托管
-  （断线自动重连）；已有转发→manual。`listener_start` 返回解析后的回连地址，
-  agent 直接填 payload，无需自行判断网络形态。
-- **redteam-ops skill**：后渗透六阶段方法论（落地稳定化→提权→权限保持→凭据
-  获取→横向移动→数据获取回传→收尾）+ 证据纪律。
-- **后渗透工具（含 9 件红队补齐）**：impacket/netexec/evil-winrm/chisel/ligolo-ng/proxychains/
-  socat/linpeas/pspy/responder/sqlmap/hydra/hashcat/nuclei/ffuf…全部可在
-  「宿主环境」页**一键装齐**（特权助手 pojun-hostd 串行排队执行）。
-
-### 审批与拦截：三层闸门
-
-| 层 | 语义 | 内置规则 |
-|---|---|---|
-| 明令禁止 `deny` | 任何语境都不可逆且无合法渗透用途——不调模型直接拒 | 10 条 |
-| 交 Agent 研判 `judge` | 作用对象取决于上下文（删测试表 vs 删生产表）——命中后走模型裁决 | 12 条 |
-| 人工确认 `ask` | 平台能力边界变更（如开监听端口）——转人工审批 | 1 条 |
-
-- 规则级 timeout 真生效（研判类 90s/allow，硬禁类 30s/deny）；
-- 模型裁决**严格 JSON 解析**（解析失败走失败策略，绝不猜）；
-- 拦截原因带「平台管控」框架——防止 agent 把平台策略当目标防御来绕；
-- 反注入边界：裁判输入刻意收窄（仅工具名+参数+工作目录），历史不进裁判视野。
-
-### 全程证据链
-
-- **MITM 记录代理**：worker 的全部 HTTP/S 流量逐请求留存（CA 签发留痕）；
-- **发现绑定流量**：finding 可绑定 baseline/proof/verification/supporting 四类
-  流量证据，快照版本化（sha256），报告引用可验证；
-- **数据回传**：本机文件内容外传类命令有专属拦截规则（judge 研判）；
-- **报告导出**：Word（OOXML 手写零依赖）按 19 类漏洞枚举折叠聚合；
-- **对抗式自检**：换身份/换参数顺序/换客户端复现——「确认了才报」。
 
 ---
 
-## 安装
+## 快速开始
 
 > 依赖 **PostgreSQL**；探索需配置 **LLM**（UI 里配，支持 Anthropic / OpenAI /
-> 任意 OpenAI 兼容网关，三通道轮询 + 故障转移）。
+> 任意 OpenAI 兼容网关，多通道轮询 + 故障转移）。
 
 ### 系统选择与配置要求
 
@@ -275,7 +364,7 @@ curl -fsSL .../install.sh | sudo bash -s -- --mode=docker
 
 ```bash
 git clone --depth 1 https://github.com/chu0119/Pojun.git pojun && cd pojun
-cp .env.example .env      # 至少改 POSTGRES_PASSWORD；POJUN_TAG 可钉到具体版本（如 v0.4.53）
+cp .env.example .env      # 至少改 POSTGRES_PASSWORD；POJUN_TAG 可钉到具体版本（如 v0.4.64）
 docker compose up -d      # → http://localhost:8787
 ```
 
@@ -322,9 +411,9 @@ CGO_ENABLED=0 go build -o pojun-hostd ./cmd/pojun-hostd   # 可选：特权安�
 
 ### 公网部署
 
-v0.3.85 起内置公网部署安全基线（登录防爆破、探活去指纹、改密吊销会话、
-认证面无产品名）。必须：HTTPS 反代 + 覆写 `X-Forwarded-For`。
-完整基线见 [docs/公网部署安全加固-2026-10-29.md](docs/公网部署安全加固-2026-10-29.md)。
+内置公网部署安全基线（登录防爆破、探活去指纹、改密吊销会话、认证面无产品名）。
+必须：HTTPS 反代 + 覆写 `X-Forwarded-For`。完整基线见
+[docs/公网部署安全加固-2026-10-29.md](docs/公网部署安全加固-2026-10-29.md)。
 
 ### 升级
 
@@ -348,11 +437,7 @@ v0.3.85 起内置公网部署安全基线（登录防爆破、探活去指纹、
 **C2 出口**（可选）：`PUT /api/c2/config` 配 `mode=direct|ssh|manual` +
 中转机地址/SSH 凭据——`listener_start` 自动返回解析后的回连地址。
 
----
-
-## 反向代理（HTTPS）
-
-前端和 API/SSE 同源，反代必须关缓冲。Nginx 示例：
+**反向代理（HTTPS）**：前端和 API/SSE 同源，反代必须关缓冲。Nginx 示例：
 
 ```nginx
 server {
@@ -371,7 +456,57 @@ server {
 
 ---
 
-## 开发
+## 内置资产清单：技能 / MCP / 工具
+
+**22 个内置技能**（按意图场景自动路由，默认绑定到对应角色）：
+
+| 领域 | 技能 |
+|---|---|
+| 综合方法论 | vuln-hunting（未知面挖掘）/ attack-surface-recon（侦察）/ pentest-output-standards（报告规范） |
+| Web 与 API | web-attack-methods / api-security-testing / api-recon |
+| 专项 | cloud-security / windows-ad / source-code-audit / llm-security / mobile-reverse / apk-reverse / contract-audit / wireless |
+| 红队后渗透 | redteam-ops（六阶段方法论）/ opsec |
+| SRC 知识库 | src-hunting（48 篇测试知识 + 11 篇流程规则，按需加载） |
+
+**10 个 MCP 预设**（一键填充配置）：FOFA 资产测绘（含 one-fox 通道）/ Playwright
+浏览器 / Chrome DevTools / Burp Suite / Fetch 网页抓取 / Sequential Thinking /
+Memory 知识库 / Filesystem / HexStrike 工具桥（150+ 安全工具桥接）/ Context7 文档检索。
+
+**66 件宿主工具**（体检 + 一键装齐）：网络与主机（nmap/masscan/naabu/tlsx…）、
+子域与 DNS（subfinder/dig/amass…）、Web 与 API（httpx/katana/ffuf/dalfox…）、
+注入与利用（sqlmap/hydra/hashcat/john…）、后渗透（impacket/netexec/evil-winrm/
+chisel/ligolo-ng/socat/proxychains/linpeas/pspy/responder…）、
+语料（SecLists 字典 / nuclei 模板）。
+
+---
+
+## 与同类项目的差异
+
+| 维度 | 常见同类 | Pojun |
+|---|---|---|
+| 完成判定 | LLM 自评「任务完成」即可收官 | 目标 + 验收标准 + `goal_met` 闸门，未全达成强制记未完成 |
+| 漏洞可信度 | 扫描器输出直接入库 | 机械验证凭据闸门 + L1-L4 证据分级 + 对抗式自检，critical/high 必须 L3+ |
+| 漏洞重复 | 按标题/URL 简单去重 | 多键去重（cve/root/endpoint/param 强键）+ 合并时间线 + 跨任务去重 |
+| 深度利用 | 确认漏洞即结束 | 攻击链自动续跳（维度→下一跳），L1→L4 影响层级推进纪律 |
+| 长任务 | 单轮超时即丢 | 后台作业 + 任务级共享脚本 + 会话复用，run 结束作业继续跑 |
+| 流量证据 | 无或截图 | MITM 逐请求留存 + 四类证据绑定 + sha256 版本化 + 报告引用 |
+| 情报 | 静态知识库 | NVD/KEV/GHSA/PoC 时间流 + 资产指纹反向匹配 + 高危快通道 |
+| 交付 | Markdown | 公文级 Word（封面/目录/复测/流量证据/修复路线图）+ 一漏洞一 docx |
+| 成本 | 单通道 | 多通道轮询 + 熔断 + 角色路由 + 缓存命中（实测 93%） |
+
+---
+
+## 实战纪律与安全边界
+
+- **授权优先**：任务创建即声明范围（域名/IP/公司主体），资产图按范围登记，
+  写回守卫在数据层拦截越界。
+- **最小伤害验证**：SQL 注入探测默认 level 2 / risk 1（只读）；文件上传只验证
+  能力不落地后门；登录面 ≤5 组默认口令失败即停；禁止大字典爆破生产系统。
+- **审批门**：破坏性命令三层闸门（deny/judge/ask），平台能力边界变更转人工。
+- **复测纯手动**：平台不自动触发任何复测动作。
+- **凭据卫生**：LLM key / FOFA key 只进运行时配置，不入仓库不入报告。
+
+## 开发与贡献
 
 ```bash
 ./dev.sh    # 后端(:8787) + 流量代理(:8788) + 前端 next dev(:5173)
@@ -383,9 +518,7 @@ cd web && npx tsc --noEmit && NEXT_EXPORT=1 npx next build
 - 前端：`cd web && npm run dev`（`/api` 反代热更新）
 - Mock 预览：`cd web && NEXT_PUBLIC_MOCK=1 npm run dev`
 
----
-
-## 项目结构
+项目结构：
 
 ```
 cmd/            程序入口（pojun 主服务 / pojun-hostd 特权助手）
@@ -397,7 +530,7 @@ guard/          工具调用审批门（把裁决接进 agent 执行链）
 listener/       回连接收器：接住反弹 shell / OOB 回连并留证
 traffic/        MITM 流量记录代理 + 出口代理池
 vulnintel/      漏洞情报：NVD/KEV/GHSA/PoC/快通道/资产联动/限速闸门
-hosttools/      宿主工具目录（54+ 件，按攻击面分类）
+hosttools/      宿主工具目录（66 件，按攻击面分类）
 hostd/          特权助手：root 常驻 unix socket，装工具/特权操作
 llmpool/        LLM 多通道轮询池：熔断/故障转移
 llmrec/         LLM 请求录制与 token 计量
@@ -408,14 +541,16 @@ enrich/         资产自动补全：DNS / HTTP 探测
 selfupdate/     一键自更新：查 Release → 校验 → 换装
 skills/         内置 skill：vuln-hunting / redteam-ops / api-recon / …
 web/            Next.js 前端（静态导出后 go:embed 内嵌）
-docs/           设计文档 / 部署手册 / 评估报告 / 能力对照
+docs/           设计文档 / 部署手册 / 能力对照
 ```
+
+欢迎 Issue 与 PR：修 bug / 补文档直接提；新功能建议先开 Issue 讨论场景与边界。
 
 ## 文档索引
 
 | 文档 | 内容 |
 |---|---|
-| [docs/AI-交接指南.md](docs/AI-交接指南.md) | AI 接手本项目入口：机制→代码位置地图、发版流程、测试纪律、已知问题与未决方向 |
+| [docs/AI-交接指南.md](docs/AI-交接指南.md) | 机制→代码位置地图、发版流程、测试纪律、已知问题与未决方向 |
 | [docs/01-双图架构.md](docs/01-双图架构.md) | 资产图/探索图、锚点、schema 迁移设计、不变量清单 |
 | [docs/02-引擎与调度闭环.md](docs/02-引擎与调度闭环.md) | planner/worker 编排与生命周期 |
 | [docs/03-LLM接入层.md](docs/03-LLM接入层.md) | 通道选路、轮询池、熔断、录制计量 |
@@ -423,30 +558,24 @@ docs/           设计文档 / 部署手册 / 评估报告 / 能力对照
 | [docs/部署手册.md](docs/部署手册.md) | 部署 / 升级 / 排障（实测踩坑全记录） |
 | [docs/公网部署安全加固-2026-10-29.md](docs/公网部署安全加固-2026-10-29.md) | 公网部署安全基线 |
 | [docs/红队能力建设-2026-10-30.md](docs/红队能力建设-2026-10-30.md) | 杀伤链能力矩阵 / 竞品对照 / 路线图 |
-| [docs/漏洞挖掘能力对比.md](docs/漏洞挖掘能力对比.md) | 与开源同类逐项对比、M 清单 |
-| [docs/产品优化清单-2026-10-29.md](docs/产品优化清单-2026-10-29.md) | 优化/新增/删除路线图（历史快照） |
-| [docs/产品全面体检-2026-10-31.md](docs/产品全面体检-2026-10-31.md) | 四路全面体检：P0 缺陷基线/冗余清单/执行批次状态 |
-| [docs/深度优化方案-2026-10-31.md](docs/深度优化方案-2026-10-31.md) | 报告质感×Agent 认知×攻击链——当前路线图 |
+| [docs/漏洞挖掘能力对比.md](docs/漏洞挖掘能力对比.md) | 与开源同类逐项对比 |
+| [docs/深度优化方案-2026-10-31.md](docs/深度优化方案-2026-10-31.md) | 报告质感 × Agent 认知 × 攻击链 |
 | [docs/模型路由策略.md](docs/模型路由策略.md) | 按角色配模型：planner 强推理/worker 中推理/judge 便宜档 |
-| [docs/同行对比分析-2026-11.md](docs/同行对比分析-2026-11.md) | 两轮 12+ 同行项目代码级调研（CAI/PentestGPT/hackingBuddyGPT/pentagi/SWE-agent/bbot/sysreptor/CVEngine/raptor/fuxi/redcell/rea）与借鉴落地清单 |
-| [docs/shannon-借鉴分析-2026-11-01.md](docs/shannon-借鉴分析-2026-11-01.md) | Shannon 借鉴：证据分级/报告叙事/认证配置/证据附件落地记录 |
+| [docs/同行对比分析-2026-11.md](docs/同行对比分析-2026-11.md) | 12+ 同行项目代码级调研与借鉴落地清单 |
+| [CHANGELOG.md](CHANGELOG.md) | 逐版本功能更新记录 |
 
-## 与原作者版本的关系（来源声明）
+## 来源声明
 
-原作者 [Autumn-27/ARTEX](https://github.com/Autumn-27/ARTEX)（百度“Agent+”攻防
-挑战赛冠军项目）于 2026-10 删除了仓库，原链接 / Release / Docker 源全部失效。
-本仓库在其**最终定版 v0.3.15**（git 历史 462 提交完整保留）基础上接手维护：
+本项目最初 fork 自己删除的原作者项目
+[Autumn-27/ARTEX](https://github.com/Autumn-27/ARTEX)（百度“Agent+”攻防挑战赛
+冠军项目）的最终定版 v0.3.15，原作者代码保留在 git 历史里作为起点。
 
 - **保留**：双图架构、planner/worker 编排、MITM 流量代理、审批门框架、基础
   工具集——原作者的架构设计是优秀的，git 历史向其致意；
-- **重建**：全部设计文档（原作者删除过 docs）、CI 门禁、依赖解耦（norma SDK
-  fork）、Docker 源；
-- **新增**：上文[能力线](#这是什么)所列的情报运营 / 红队作战 / 安全加固 /
-  工程可靠性 / 工具与交付五大线，以及 725+ 提交的持续修复与加固。
-
-换言之：**起点是别人的，现在是我们的。**
-
----
+- **重建**：全部设计文档、CI 门禁、依赖解耦（norma SDK fork）、Docker 源；
+- **独立演进**：v0.3.16 以来 700+ 提交、约 5 万行新增由本仓库维护者完成，
+  覆盖情报运营 / 目标闸门 / 攻击链 / 执行面 / 去重合并 / 证据链 / 技能体系等
+  整条能力线，与原项目已无代码级关联。
 
 ## 许可与免责声明
 
@@ -472,5 +601,11 @@ docs/           设计文档 / 部署手册 / 评估报告 / 能力对照
 ## 参考
 
 - [norma](https://github.com/Autumn-27/norma) — agent harness SDK（本平台多 Agent 引擎）
-- [Cairn](https://github.com/oritera/Cairn) — 黑板架构参考
 - [SecLists](https://github.com/danielmiessler/SecLists) / [nuclei-templates](https://github.com/projectdiscovery/nuclei-templates) — 语料与模板
+- [FOFA](https://fofa.info) — 资产测绘（内置 MCP 预设）
+
+<div align="center">
+
+**破军 · Pojun** — 找到防线的破口，并把破口证明给你看。
+
+</div>
