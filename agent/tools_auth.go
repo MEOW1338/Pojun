@@ -10,6 +10,8 @@ import (
 	actool "github.com/Autumn-27/norma/tool"
 
 	"github.com/chu0119/pojun/db"
+	"os"
+	"path/filepath"
 )
 
 // 凭据复用工具：把「资产上已经登记的凭据」变成「可直接执行的带认证请求」。
@@ -129,8 +131,8 @@ func (t *ToolSet) authRequest() actool.CoreTool {
 				"run_with_bash": cmd,
 				"auth_kind":     authKind(entry),
 				"auth_source":   fmt.Sprintf("资产#%d 的第 %d 条凭据", a.AssetID, idx),
-				"note": "用 Bash 工具执行上面这条命令。**命令含明文凭据**——不要把命令原文"+
-					"写进 fact/报告，用「资产#<id> 的 <类型> 凭据」指代。响应 401/403 说明"+
+				"note": "用 Bash 工具执行上面这条命令。**命令含明文凭据**——不要把命令原文" +
+					"写进 fact/报告，用「资产#<id> 的 <类型> 凭据」指代。响应 401/403 说明" +
 					"凭据或认证方式不对，换资产上的另一条凭据试（auth_index）。",
 			})
 		},
@@ -257,3 +259,32 @@ func buildAuthCurl(rawURL, method, body, extraHeader string, e authEntry) (strin
 
 // 编译期确认 db 包被使用（authEntry 的字段与 db.Asset.Auth 对应）。
 var _ = db.Asset{}
+
+// sessionJarPath 返回任务级 cookie jar 路径（tasks/<id>/shared/sessions/<name>.jar）。
+// 空 runDir / 非法会话名返回空串。跨意图复用同一任务目录，登录一次即可多处使用。
+// （红队版 v0.7.0 同款实现，随 http_request/session_login 一并下放。）
+func (t *ToolSet) sessionJarPath(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" || t.runDir == "" {
+		return ""
+	}
+	clean := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		}
+		return -1
+	}, name)
+	if clean == "" || len(clean) > 64 {
+		return ""
+	}
+	root := filepath.Dir(t.runDir)
+	if filepath.Base(root) == "shared" {
+		root = filepath.Dir(root)
+	}
+	dir := filepath.Join(root, "shared", "sessions")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return ""
+	}
+	return filepath.Join(dir, clean+".jar")
+}

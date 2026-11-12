@@ -742,6 +742,15 @@ func (t *ToolSet) WorkerTools() []actool.CoreTool {
 		t.jsAudit(),
 		// auth_request：用资产上已登记的凭据组装带认证的请求（横向/越权验证的前提）。
 		t.authRequest(),
+		// 原生 HTTP 执行器 + 会话复用（红队版 v0.7.0 下放）：直接发请求拿结构化结果，
+		// 登录态进任务级 cookie jar 跨意图复用——「登录→越权→回读」成为基本能力。
+		t.httpRequest(), t.sessionLogin(),
+		// PoC 脚手架（红队版 v0.7.0 下放）：按类别生成可运行的验证骨架。
+		t.pocScaffold(),
+		// 任务级后台作业（红队版 v0.7.0 下放）：长扫描跨意图存活。
+		t.jobStart(), t.jobStatus(), t.jobOutput(), t.jobStop(),
+		// 任务级共享脚本（红队版 v0.7.0 下放）：登录脚本/PoC 跨意图复用。
+		t.saveScript(), t.runScript(),
 		// diff_responses：对比两个响应的结构性差异（越权/可枚举/状态机三类的共同基础）。
 		t.diffResponses(),
 		// api_contract：读目标暴露的 API 契约文件，拿到比爬虫更准的接口清单。
@@ -787,8 +796,8 @@ func (t *ToolSet) MainAgentTools() []actool.CoreTool {
 		t.listenerStart(), t.listenerStop(), t.listenerSessions(),
 		// auth_request：用资产上已登记的凭据组装带认证的请求（横向/越权验证的前提）。
 		t.authRequest(),
-		// diff_responses：对比两个响应的结构性差异（越权/可枚举/状态机三类的共同基础）。
-		t.diffResponses(),
+		t.httpRequest(), t.sessionLogin(),
+		t.diffResponses(), t.diffResponses(),
 		// api_contract：读目标暴露的 API 契约文件，拿到比爬虫更准的接口清单。
 		t.apiContractTool(),
 		// search_recent_critical：按【时间】查最近披露的高危漏洞（不需先知道组件名/CVE 号）。

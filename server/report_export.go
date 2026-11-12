@@ -129,12 +129,14 @@ func (s *Server) exportTaskDocx(w http.ResponseWriter, r *http.Request) {
 		}
 		appendix[ty] = names
 	}
+	goals, _ := t.Store.ListByKind(db.KindGoal, 1000)
 	doc := report.BuildTaskDocx(report.TaskDocxInput{
 		Title:          fmt.Sprintf("渗透测试报告 — %s", t.Description),
 		Goal:           t.Goal,
 		GeneratedAt:    time.Now(),
 		AssetCounts:    counts,
 		Findings:       findings,
+		Goals:          report.GoalLines(goals),
 		AssetNames:     s.reportAssetNames(findings),
 		Retests:        s.reportRetests(findings),
 		Customer:       s.taskCustomerNames(t),

@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -334,8 +336,18 @@ type RecordFindingInput struct {
 	TaskID, ExplorationID, IntentID                      int64
 	VulnClass, Name, Severity, Summary, Evidence, Worker string
 	AssetIDs                                             []int64
-	// CrossTaskNotifyDedup：同指纹漏洞在其他任务已存在时，不再为
-	// 本任务重复推送通知（漏洞记录本身照常入库，页面可见）。
+	// v0.9 多键去重：同一根因的不同利用面/数据扩展应传同一个 RootCauseKey；
+	// MergeIntoFindingID 显式指定合并目标（优先级最高）；SurfaceNote 描述本次
+	// 利用面，写入更新记录。Endpoint/HTTPMethod/Parameter 可选，用于生成端点/参数键。
+	RootCauseKey       string
+	MergeIntoFindingID int64
+	SurfaceNote        string
+	Endpoint           string
+	HTTPMethod         string
+	Parameter          string
+	// CrossTaskNotifyDedup（v0.6.18）：同指纹漏洞在其他任务已存在时，不再为本任务
+	// 的这条重复记录插入推送事件（客户反馈：跨任务重复漏洞「一直播报」）。漏洞本身
+	// 照常入库——各任务的发现记录相互独立，只是不重复打扰。
 	CrossTaskNotifyDedup bool
 }
 
@@ -346,17 +358,60 @@ type RecordedFinding struct {
 	// Duplicate=true 表示本次上报命中了同任务内已有的同指纹漏洞,证据已合并
 	// 进原记录(而不是新建);调用方应据此提示模型停止重复上报。
 	Duplicate bool `json:"-"`
-	// CrossTaskDupTasks：非空 = 同指纹漏洞在其他任务也已存在
-	// （本次通知已按 CrossTaskNotifyDedup 抑制）。调用方据此在回执里提示模型「跨任务重复」。
+	// CrossTaskDupTasks（v0.6.18）：非空 = 同指纹漏洞在其他任务也已存在（本次通知
+	// 已按 CrossTaskNotifyDedup 抑制）。调用方据此在回执里提示模型「跨任务重复」。
 	CrossTaskDupTasks []int64 `json:"-"`
 	// SkippedRefs 是本次提交里无法解析(流量 ID 不存在/正文不可读)的引用。
 	// 漏洞本身照常入库——猜错一个 ID 不该丢掉已确认的漏洞——但调用方要把
 	// 这些 ID 原样回给模型,让它知道哪些证据没挂上。
 	SkippedRefs []TrafficRef `json:"skipped_traffic_refs,omitempty"`
+	// MergeCandidates 是弱键命中的「可能重复」记录（不自动合并），供页面人工复核。
+	MergeCandidates []int64 `json:"merge_candidates,omitempty"`
 }
 
 // FindingFingerprint 归一化 (vulnclass, name, sorted asset_ids) 为上报指纹。
 // 归一:小写、压缩空白;资产按 id 排序消除上报顺序差异。
+// normalizeFindingName 去掉漏洞名称里的括注噪声与标点空白差异，作为指纹的一部分。
+// 现网实测（任务 #11 交付体检）：同一漏洞换个「（完整证据）/（更新证据）/ (SQLite)」
+// 后缀就绕过了指纹，22 条上报里 14 条是同一漏洞的换皮重复——报告页被刷屏，
+// 客户侧观感极差。显示名保持原样，只有指纹用归一后的名称。
+func normalizeFindingName(name string) string {
+	s := findingBrackets.ReplaceAllString(name, " ")
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(s))), " ")
+}
+
+var findingBrackets = regexp.MustCompile(`[（(【\[][^）)】\]]*[）)】\]]`)
+
+// findingLocator 从名称/证据里提取“定位键”（CVE、URL 路径、端口），用于指纹。
+// 没有资产锚定时，旧指纹退化为「类别|名称」，不同端点/参数的同类漏洞会被合并；
+// 有了定位键就能区分，同时仍把「同一漏洞换证据再报一次」合并掉。
+var (
+	findingCVERe  = regexp.MustCompile(`(?i)\bCVE-\d{4}-\d{4,}\b`)
+	findingURLRe  = regexp.MustCompile(`(?i)https?://[^\s"'<>）)，,]+`)
+	findingPathRe = regexp.MustCompile(`(/[a-zA-Z0-9_\-./]{3,})`)
+	findingPortRe = regexp.MustCompile(`(?i)(?:端口|port)\s*[:=]?\s*(\d{1,5})`)
+)
+
+func findingLocator(in RecordFindingInput) string {
+	text := in.Name + " " + in.Summary + " " + in.Evidence
+	if m := findingCVERe.FindString(text); m != "" {
+		return strings.ToUpper(m)
+	}
+	if m := findingURLRe.FindString(text); m != "" {
+		if u, err := url.Parse(m); err == nil && u.Host != "" {
+			return strings.ToLower(u.Host + u.EscapedPath())
+		}
+		return strings.ToLower(m)
+	}
+	if m := findingPathRe.FindString(text); m != "" {
+		return strings.ToLower(strings.TrimRight(m, "/."))
+	}
+	if m := findingPortRe.FindStringSubmatch(text); len(m) == 2 {
+		return "port:" + m[1]
+	}
+	return ""
+}
+
 func FindingFingerprint(in RecordFindingInput) string {
 	norm := func(s string) string { return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(s))), " ") }
 	ids := append([]int64{}, in.AssetIDs...)
@@ -365,7 +420,19 @@ func FindingFingerprint(in RecordFindingInput) string {
 	for i, v := range ids {
 		parts[i] = strconv.FormatInt(v, 10)
 	}
-	raw := norm(in.VulnClass) + "|" + norm(in.Name) + "|" + strings.Join(parts, ",")
+	loc := findingLocator(in)
+	// 无资产锚定且无定位键：指纹只剩「类别|名称」，合并会把不同端点的真实发现
+	// 误并成一条。返回空串 = 不参与去重（RecordFindingTx 会跳过合并）。
+	if len(ids) == 0 && loc == "" {
+		return ""
+	}
+	namePart := normalizeFindingName(in.Name)
+	// 同一 CVE 的标题常被换措辞（“Apache RCE”/“Apache RCE 二次确认”），以 CVE 为准，
+	// 名称不参与指纹，避免同一漏洞被重复开行。
+	if strings.HasPrefix(loc, "CVE-") {
+		namePart = ""
+	}
+	raw := norm(in.VulnClass) + "|" + namePart + "|" + strings.Join(parts, ",") + "|" + loc
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:16]) // 128-bit 足够;避免长索引键
 }
@@ -397,51 +464,36 @@ func RecordFindingTx(ctx context.Context, tx *sql.Tx, in RecordFindingInput, pre
 	// ── 同任务内指纹去重:同一 (vulnclass,name,assets) 视为同一漏洞的重复上报,
 	// 证据合并进已有记录而不是再插一行——"报了 A 又把 A 重新报一遍"在写入层被
 	// 硬性拦住,不依赖模型自觉。
-	// 仅对【带资产锚定】的上报启用:无资产锚定时无法区分"同一目标"与"两个
-	// 不同入口的同名漏洞",合并会误伤(如不同端口各一个 SQLi 都叫 SQL injection);
-	// 宁漏勿误,worker 正常上报都会带 asset_ids。
+	// v0.6.22：**不再要求带资产锚定**。现网实测（交付体检任务 #11）：worker 上报漏洞
+	// 时普遍不带 asset_ids（资产写回为 0），旧逻辑因此整段跳过去重，同一指纹在
+	// 一个任务里插了 4–7 行。指纹本身已包含资产集合（空集也参与哈希），同指纹即
+	// 同一 (类,名,资产集) 三元组；无锚定时的「不同端口同名漏洞」歧义接受合并
+	// （证据只增不丢），重复刷屏对客户的伤害远大于此。
 	// resolved/fixed/false_positive/ignored 已是终态或人工结论,不参与合并
 	// (修复后再复现 = 值得新开一条;误报后再证实 = 翻案)。
 	// vulnclass 归一(变体写法→标准类别):写入即归一,聚合视图与指纹去重
 	// 都基于标准值——SQLi 与 SQL注入 从此是同一类别、同一指纹。
 	in.VulnClass = NormalizeVulnClass(in.VulnClass)
 	fp := FindingFingerprint(in)
-	if in.TaskID > 0 && fp != "" && len(in.AssetIDs) > 0 {
-		var (
-			dupeID     int64
-			dupeNode   int64
-			dupeStatus string
-		)
-		err := tx.QueryRow(`SELECT id, COALESCE(node_id,0), status FROM findings
-			WHERE task_id=$1 AND fingerprint=$2
-			  AND status IN ('pending','in_progress','confirmed')
-			ORDER BY id LIMIT 1 FOR UPDATE`, in.TaskID, fp).Scan(&dupeID, &dupeNode, &dupeStatus)
-		if err == nil {
-			stamp := time.Now().UTC().Format("2006-01-02 15:04")
-			appendix := fmt.Sprintf("\n\n--- 二次确认(worker=%s, %s UTC) ---\n%s", in.Worker, stamp, in.Evidence)
-			if _, err := tx.Exec(`UPDATE findings SET evidence = evidence || $2, severity = $3 WHERE id=$1`,
-				dupeID, appendix, in.Severity); err != nil {
+	keys := FindingDedupKeys(in, fp)
+	// v0.9：多键合并。名称为空的样本不参与自动合并：空名 + 空资产时只有类别，
+	// 会把「同一类别下的两条真实不同发现」误并（v0.6.22 全量测试实测）。
+	if in.TaskID > 0 && strings.TrimSpace(in.Name) != "" {
+		targetID, err := findFindingMergeTargetTx(tx, in, fp, keys)
+		if err != nil {
+			return nil, err
+		}
+		if targetID > 0 {
+			out, err := mergeReportIntoTargetTx(ctx, tx, targetID, in, prepared, keys)
+			if err != nil {
 				return nil, err
 			}
-			// 血缘:这个 intent 也(再次)产出了该漏洞节点,planner 链路完整。
-			if in.IntentID > 0 && dupeNode > 0 {
-				if _, err := tx.Exec(`INSERT INTO exploration_edges(exploration_id,src_id,rel,dst_id)
-					SELECT $1,$2,$3,$4 WHERE NOT EXISTS(
-						SELECT 1 FROM exploration_edges WHERE exploration_id=$1 AND src_id=$2 AND rel=$3 AND dst_id=$4)`,
-					in.ExplorationID, in.IntentID, RelYields, dupeNode); err != nil {
-					return nil, err
-				}
-			}
-			out := &RecordedFinding{FindingID: dupeID, NodeID: dupeNode, Duplicate: true}
-			// 重复上报同样要把本次带来的流量挂到原记录上:二次确认往往带着
-			// 更新后的复现包(不同响应码/新载荷),只并文字证据会把它丢掉。
-			if err := AddFindingTrafficTx(tx, dupeID, prepared); err != nil {
-				return nil, err
-			}
-			out.Traffic, err = FindingTrafficTx(tx, dupeID)
-			return out, err
+			return out, nil
 		}
 	}
+	// 未命中强键：仍按旧指纹兜底（历史行可能没有 finding_keys），并把弱键候选
+	// 一起返回给调用方做「可能重复」提示，不自动合并。
+	var mergeCandidates []int64
 	payload, _ := json.Marshal(map[string]any{"vulnclass": in.VulnClass, "name": in.Name, "severity": in.Severity, "summary": in.Summary, "evidence": map[string]any{"by": in.Worker, "poc": in.Evidence}})
 	out := &RecordedFinding{}
 	if err := tx.QueryRow(`INSERT INTO exploration_nodes(exploration_id,kind,payload,priority,state,origin)
@@ -463,16 +515,24 @@ VALUES($1,'finding',$2,9,'confirmed',$3) RETURNING id`, in.ExplorationID, string
 		assets = []int64{}
 	}
 	raw, _ := json.Marshal(assets)
-	if err := tx.QueryRow(`INSERT INTO findings(task_id,node_id,vulnclass,name,severity,summary,evidence,worker,asset_ids,fingerprint)
-VALUES(NULLIF($1,0),$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`, in.TaskID, out.NodeID, in.VulnClass, in.Name, in.Severity, in.Summary, in.Evidence, in.Worker, string(raw), fp).Scan(&out.FindingID); err != nil {
+	rootKey := normalizeRootCauseKey(in.RootCauseKey)
+	if err := tx.QueryRow(`INSERT INTO findings(task_id,node_id,vulnclass,name,severity,summary,evidence,worker,asset_ids,fingerprint,root_cause_key)
+VALUES(NULLIF($1,0),$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`, in.TaskID, out.NodeID, in.VulnClass, in.Name, in.Severity, in.Summary, in.Evidence, in.Worker, string(raw), fp, rootKey).Scan(&out.FindingID); err != nil {
 		return nil, err
 	}
+	if err := insertFindingKeysTx(tx, out.FindingID, keys); err != nil {
+		return nil, err
+	}
+	if err := insertFindingUpdateTx(tx, out.FindingID, "initial", 0, in, in.Summary, in.Evidence, prepared); err != nil {
+		return nil, err
+	}
+	mergeCandidates = weakFindingCandidatesTx(tx, out.FindingID, keys)
+	out.MergeCandidates = mergeCandidates
 	// 在**同一事务**里登记一条推送事件：提交即保证「漏洞落库」与「推送任务存在」
 	// 原子一致，不存在提交成功却没入队、消息永久丢失的窗口。
 	// 这里的失败被隔离在保存点上、不影响漏洞写入（见函数注释），因此忽略返回值。
-	//
-	// v0.4.63 跨任务去重：同指纹漏洞在其他未删除任务已存在时不再重复
-	// 推送通知（客户反馈跨任务重复漏洞「一直播报」）；漏洞记录本身照常保留。
+	// v0.6.18 跨任务去重：同指纹漏洞在其他未删除任务已存在时不再重复推送
+	// （客户反馈跨任务重复漏洞「一直播报」）；漏洞记录本身照常保留。
 	if in.CrossTaskNotifyDedup {
 		var dupTasks []int64
 		dupRows, dupErr := tx.Query(`SELECT f.task_id FROM findings f
@@ -494,7 +554,9 @@ GROUP BY f.task_id ORDER BY f.task_id`, fp, in.TaskID)
 			out.CrossTaskDupTasks = dupTasks
 		}
 	}
-	if !(in.CrossTaskNotifyDedup && len(out.CrossTaskDupTasks) > 0) {
+	if in.CrossTaskNotifyDedup && len(out.CrossTaskDupTasks) > 0 {
+		// 抑制推送：跨任务重复不再打扰（记录本身保留，页面可见）。
+	} else {
 		RecordNotificationEventTx(ctx, tx, notify.EventFindingCreated, out.FindingID, notify.Snapshot{
 			Kind:      notify.EventFindingCreated,
 			FindingID: out.FindingID,
@@ -505,7 +567,7 @@ GROUP BY f.task_id ORDER BY f.task_id`, fp, in.TaskID)
 			Summary:   in.Summary,
 			AssetIDs:  assets,
 		})
-	} // 跨任务重复被抑制时：记录本身保留（页面可见），只不打扰通知。
+	}
 	if err := AddFindingTrafficTx(tx, out.FindingID, prepared); err != nil {
 		return nil, err
 	}
@@ -560,14 +622,28 @@ func (s *ExplorationStore) PopulateFindingTrafficIDs(nodes []*Node) error {
 	return rows.Err()
 }
 
+// SetFindingReportVersionByNodeID 写漏洞报告。入参既可以是探索节点 ID，也可以是
+// findings 表主键——两者模型都拿得到（report_finding 返回首行是节点 ID，JSON 里是
+// 记录 ID），现网 reporter 会先试记录 ID 再纠回节点 ID，白白废掉一轮。
+// 解析顺序：先按 node_id 精确匹配，命中不了再把入参当 findings.id 反查 node_id。
 func (d *DB) SetFindingReportVersionByNodeID(ctx context.Context, nodeID int64, report string, version *int64) (n int64, err error) {
 	err = d.WithEvidenceTx(ctx, func(tx *sql.Tx) error {
 		var id int64
-		if err := tx.QueryRow(`SELECT id FROM findings WHERE node_id=$1`, nodeID).Scan(&id); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return nil
+		errLookup := tx.QueryRow(`SELECT id FROM findings WHERE node_id=$1`, nodeID).Scan(&id)
+		if errors.Is(errLookup, sql.ErrNoRows) {
+			// 兼容「传了 findings.id」：反查它对应的 node_id，后续按节点口径继续。
+			var realNode sql.NullInt64
+			if err := tx.QueryRow(`SELECT id,node_id FROM findings WHERE id=$1`, nodeID).Scan(&id, &realNode); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return nil
+				}
+				return err
 			}
-			return err
+			if realNode.Valid {
+				nodeID = realNode.Int64
+			}
+		} else if errLookup != nil {
+			return errLookup
 		}
 		if err := LockFindingEvidenceTx(tx, id, version); err != nil {
 			return err

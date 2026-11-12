@@ -83,6 +83,16 @@ type ToolSet struct {
 	ScopeWriteGuard      bool // 写回锚定守卫：fact/finding 只能锚定自有范围资产（默认开）
 	ScopeInheritWrites   bool // 继承/来源任务范围资产也可写（默认关；串资产根因开关）
 	CrossTaskNotifyDedup bool // 跨任务同指纹漏洞不再重复推送（默认开）
+	// egressProxy / egressCA 是原生 HTTP 执行器（http_request/session_login）的出口：
+	// 与 Bash 的 HTTP_PROXY 同源（记录 MITM 或全局代理），保证流量留痕一致。
+	egressProxy string
+	egressCA    string
+	// lastScopeWarnings 是最近一次 record_fact 中 source/foreign 资产的提示，
+	// 只回传、不阻断写入。
+	lastScopeWarnings []string
+	// lastLowNovelty 是本轮 record_fact 中「低新颖度」条数（与最近事实高度相似或
+	// 没有任何 evidence）。这类写回仍会入库，但不会重置意图租约的零写回计时。
+	lastLowNovelty int
 	// runDir 是本次运行的专属工作目录（worker 在这里产生截图/样本），
 	// save_evidence 的相对路径基准；由 Worker.Execute 注入。
 	runDir string
@@ -1246,6 +1256,7 @@ func (t *ToolSet) nodeDetail() actool.CoreTool {
 // intentItem 是 add_intent 批量/单条的一条探索方向。
 type intentItem struct {
 	Summary   string            `json:"summary"`
+	Dimension string            `json:"dimension,omitempty"` // 攻击链续跳：继任意图的维度（injection/authz/…）
 	AssetIDs  []json.RawMessage `json:"asset_ids"`
 	ParentIDs []json.RawMessage `json:"parent_ids"`
 	Priority  int               `json:"priority"`
@@ -1532,6 +1543,26 @@ func (t *ToolSet) goalMet() actool.CoreTool {
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct{ Reason string }
 			_ = json.Unmarshal(in, &a)
+			// v0.6.31 内部版同款闸门：未达成/未证明的目标存在时禁止整体收官。
+			// 旧实现允许 planner 以「边际收益耗尽」为由 goal_met 结束任务（目标被标 unverified），
+			// 界面/报告却显示「已完成」——这正是「只完成一部分却自己判完成」的来源。
+			if t.ts != nil {
+				unmet := 0
+				var ids []string
+				if goals, err := t.ts.ListByKind(db.KindGoal, 1000); err == nil {
+					for _, g := range goals {
+						if g.State != "met" {
+							unmet++
+							if len(ids) < 5 {
+								ids = append(ids, fmt.Sprintf("#%d", g.ID))
+							}
+						}
+					}
+				}
+				if unmet > 0 {
+					return actool.Errorf(fmt.Sprintf("还有 %d 个目标未达成（%s），禁止整体收官：goal_met 只能在全目标已用 prove_goal 证明后调用。请继续派深挖/利用链意图；若确认客观不可推进，把阻塞证据写成 fact（含已尝试手段与失败输出），任务会按超时/轮数上限以「未完成」收尾，而不是显示达成。", unmet, strings.Join(ids, "、"))), nil
+				}
+			}
 			t.GoalMet = true
 			t.Reason = a.Reason
 			// 可审计：goal_met 是「整体声称达成」，没有走 prove_goal 的逐条证据链。
@@ -1674,6 +1705,8 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			EvidenceStatus     string `json:"evidence_status"`
 			EvidenceNote       string `json:"evidence_note,omitempty"`
 			EvidenceVerifyNote string `json:"evidence_verify_note,omitempty"`
+			ChainIntentID      int64  `json:"chain_intent_id,omitempty"`
+			ChainNote          string `json:"chain_note,omitempty"`
 		}{RecordedFinding: recorded, EvidenceStatus: "bound", EvidenceVerifyNote: verifyNote}
 		if len(recorded.CrossTaskDupTasks) > 0 {
 			ids := make([]string, 0, len(recorded.CrossTaskDupTasks))
@@ -1717,6 +1750,14 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			result.EvidenceStatus = "partially_bound"
 			result.EvidenceNote += " ⚠ 以下流量引用未生效（ID 不存在或正文不可读）：" + strings.Join(ids, ", ") +
 				"。已生效的引用已正常绑定；若这些 ID 确实存在，请用 traffic_get 核实真实 ID 后用 bind_finding_traffic 补绑。"
+		}
+		// 攻击链自动续跳（v0.4.63 红队批次下放）：只有新建的 finding 才续跳；重复上报（已合并）不派。
+		if !recorded.Duplicate {
+			if cid, note := t.dispatchChainIntent(a.VulnClass, a.Name, a.Summary, a.Severity,
+				pidList(a.AssetIDs), recorded.NodeID, pid(a.IntentID)); cid > 0 || note != "" {
+				result.ChainIntentID = cid
+				result.ChainNote = note
+			}
 		}
 		// 回溯归属（v0.4.47）：同一意图目录下所有 finding_id 为空的证据一次性归属。
 		if bindIntent := pid(a.IntentID); bindIntent > 0 && t.taskID > 0 {

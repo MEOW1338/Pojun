@@ -1511,3 +1511,42 @@ CREATE TABLE IF NOT EXISTS task_progress (
     tested_count  BIGINT NOT NULL DEFAULT 0,
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+
+-- ── 漏洞多键去重与合并（红队版 v0.9 下放，2026-11-10）──────────────────
+-- root_cause_key 由 Agent 显式声明（同根因跨端点）；merge_count 记录合并进来的来源数；
+-- merged_into_id 让被合并记录可追溯（不物理删除）；last_merged_at 供列表排序/提示。
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS root_cause_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS merge_count INT NOT NULL DEFAULT 0;
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS merged_into_id BIGINT REFERENCES findings(id) ON DELETE SET NULL;
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS last_merged_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_findings_merged_into ON findings(merged_into_id) WHERE merged_into_id IS NOT NULL;
+
+-- 一条 finding 可带多个身份键：cve / root / endpoint / param（强键，自动合并）、
+-- asset_class / name（弱键，只做候选提示）、legacy（兼容旧指纹）。
+CREATE TABLE IF NOT EXISTS finding_keys (
+    finding_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    dedup_key  TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (finding_id, dedup_key)
+);
+CREATE INDEX IF NOT EXISTS idx_finding_keys_key ON finding_keys(dedup_key);
+
+-- 漏洞更新记录：初始上报、自动/人工合并、证据补绑、报告与状态变更都留一条，
+-- 供详情页时间线与报告来源说明使用。findings.evidence/report 仍是当前快照。
+CREATE TABLE IF NOT EXISTS finding_updates (
+    id          BIGSERIAL PRIMARY KEY,
+    finding_id  BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL,
+    source_id   BIGINT REFERENCES findings(id) ON DELETE SET NULL,
+    worker      TEXT NOT NULL DEFAULT '',
+    intent_id   BIGINT,
+    summary     TEXT NOT NULL DEFAULT '',
+    evidence    TEXT NOT NULL DEFAULT '',
+    report      TEXT NOT NULL DEFAULT '',
+    asset_ids   JSONB NOT NULL DEFAULT '[]',
+    traffic_ids JSONB NOT NULL DEFAULT '[]',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_finding_updates_finding ON finding_updates(finding_id, id DESC);

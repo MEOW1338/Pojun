@@ -90,3 +90,20 @@ const scopeVerifyPlannerGuidance = `
 - **写回守卫是硬的**：record_fact / report_finding 锚定非自有范围资产会被直接拒绝——与其被拒，
   不如按上面两条先把归属坐实、把范围声明清楚。
 `
+
+// execFaceWorkerGuidance 是 worker 的「执行面」硬尾巴（v0.7.0 红队批次下放）。
+const execFaceWorkerGuidance = `
+【执行面（原生执行器优先于手写 curl）】
+- 需要登录态的链：session_login 一次登录（凭据优先从资产取 asset_id+auth_index），后续 http_request(session=同名) 自动带 cookie；两个身份做越权对照就用两个 session。auth_request/session_request 只用于需要把命令交给 Bash 的场景。
+- 需要构造验证脚本：poc_scaffold 按类别（sqli/ssti/lfi/ssrf/idor/jwt/upload/cmdi/race）生成可运行的 Python 骨架——基线对照/载荷表/命中判据都写好，改参数即可运行。
+- 长扫描/爆破/批量导出：job_start 放到任务级后台作业（run 结束后进程继续跑），job_status/job_output 取结果——不要因为单意图墙钟把长任务丢掉重做。
+- 拿到 shell/凭据：立即 record_fact 记录并派/做下一跳（凭据→横向、shell→配置与数据）。
+`
+
+// execFacePlannerGuidance 是 planner 的「执行面编排」硬尾巴（v0.7.0 红队批次下放）。
+const execFacePlannerGuidance = `
+【执行面编排（后台作业与攻击链）】
+- 每轮先看 job_status：有已完成的后台作业就把结果取回（job_output）并写回 fact/finding。
+- 攻击链续跳已自动派发继任意图（report_finding 回执里的 chain_intent_id）——不要为同一维度重复派单；如需变体，改参数或换入口。
+- list_facts(q=凭据/token/shell) 复用已拿到的弹药；同一资产同一维度 ≥2 次零产出必须换维度。
+`

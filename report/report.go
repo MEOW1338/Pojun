@@ -19,6 +19,8 @@ type Input struct {
 	GeneratedAt time.Time
 	AssetCounts map[string]int
 	Findings    []*db.Node
+	// Goals 是逐条任务目标及其达成状态（红队版 v0.6.31 下放）；nil = 报告省略「目标达成情况」。
+	Goals []GoalLine
 }
 
 type findingView struct {
@@ -68,6 +70,30 @@ func Markdown(in Input) string {
 		fmt.Fprintf(&b, "%s %d", t, in.AssetCounts[t])
 	}
 	b.WriteString("\n\n")
+
+	// 目标达成情况（红队版 v0.6.31 下放）：如实呈现「做完了多少」，避免只完成
+	// 部分目标却像全部完成。
+	if len(in.Goals) > 0 {
+		met, total := GoalTally(in.Goals)
+		fmt.Fprintf(&b, "## 目标达成情况\n\n")
+		fmt.Fprintf(&b, "- 目标总数：**%d**；已证明达成：**%d**", total, met)
+		if met < total {
+			b.WriteString("（**未全部达成**，任务按「未完成」记录）")
+		}
+		b.WriteString("\n\n")
+		for i, g := range in.Goals {
+			mark := "未达成"
+			if g.Met() {
+				mark = "已达成"
+			}
+			fmt.Fprintf(&b, "%d. [%s] %s", i+1, mark, g.Text)
+			if g.Criteria != "" {
+				fmt.Fprintf(&b, "（验收标准：%s）", g.Criteria)
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
 
 	// findings
 	fmt.Fprintf(&b, "## 发现\n\n")

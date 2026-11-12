@@ -206,6 +206,39 @@ func (e *Engine) deadlineCoordinator(ctx context.Context, t *Task) {
 	}
 }
 
+// taskGoalProgress 返回本任务目标的达成数与总数（无目标时 0/0，视为无需证明）。
+func taskGoalProgress(t *Task) (met, total int) {
+	if t == nil || t.Store == nil {
+		return 0, 0
+	}
+	goals, err := t.Store.ListByKind(db.KindGoal, 1000)
+	if err != nil {
+		return 0, 0
+	}
+	for _, g := range goals {
+		total++
+		if g.State == "met" {
+			met++
+		}
+	}
+	return met, total
+}
+
+// settleTerminalStatus 计算收尾终态（红队版 v0.6.31 下放）。
+//
+// 语义：只有「目标全部达成」才允许 done；存在未达成目标时，无论收尾原因是什么
+// （超时 / 自动空转 / 覆盖度 / 轮数上限），终态一律 timeout——UI 据此显示
+// 「未完成」，而不是把做了一半的任务标成完成。totalGoals==0 的任务沿用旧语义。
+func settleTerminalStatus(allGoalsMet bool, reason string, finalRoundMet bool) string {
+	if !allGoalsMet {
+		return "timeout"
+	}
+	if reason == "timeout" && !finalRoundMet {
+		return "timeout"
+	}
+	return "done"
+}
+
 // settleTask runs the ordered settle sequence once (§4 steps ①–⑥).
 func (e *Engine) settleTask(ctx context.Context, t *Task) {
 	e.settleTaskWithReason(ctx, t, "timeout", "到达任务超时上限")
@@ -263,10 +296,15 @@ func (e *Engine) settleTaskWithReason(ctx context.Context, t *Task, reason, deta
 	// ⑤′ 落终态前点名缺报告的漏洞（终局后不再派 worker，只能提示人补齐）。
 	e.warnFindingsWithoutReport(t)
 
-	// ⑥ 定终态(带守卫)：timeout 保持 met?done:timeout；自动收尾统一 done。
-	status := "done"
-	if reason == "timeout" && !met {
-		status = "timeout"
+	// ⑥ 定终态(带守卫)：只有「目标全部被证明达成」才算 done。
+	// 红队版 v0.6.31 下放：自动收尾（idle/coverage/轮数）与 goal_met 在目标未达成时
+	// 一律落 timeout，由界面显示「未完成·已停止」——旧的「自动收尾统一 done」正是
+	// 「只做了一部分却显示完成」的来源。
+	metGoals, totalGoals := taskGoalProgress(t)
+	allGoalsMet := totalGoals == 0 || metGoals >= totalGoals
+	status := settleTerminalStatus(allGoalsMet, reason, met)
+	if status == "timeout" && !allGoalsMet {
+		log.Printf("[settle] task %s 目标未全部达成(%d/%d)，终态记 timeout（未完成）而非 done", t.ID, metGoals, totalGoals)
 	}
 	won, err := e.m.SetTaskStatusGuarded(t.ID, status)
 	switch {

@@ -4,6 +4,42 @@
 
 ## [Unreleased]
 
+## [0.4.64] - 2026-11-10
+
+> 红队批次第二批：原生 HTTP 执行器与会话复用、PoC 脚手架、任务级后台作业、
+> 攻击链自动续跳、漏洞多键去重与合并、目标达成诚实呈现。
+
+### 新增
+
+- **http_request 原生执行器**：Go 直接发请求，一次调用返回 status/headers/正文
+  片段/耗时/body_sha256；大响应自动落盘给 body_file 指针；走记录代理照常留证。
+  消灭「领域工具组命令 → 模型再调 Bash」的双重 LLM 往返。
+- **session_login + 会话复用**：一次登录写任务级 cookie jar（Netscape 格式与 curl
+  互通；form/json/basic/bearer/cookie 五形态；凭据优先从资产 auth 取，明文不进
+  对话）；后续 http_request(session=同名) 自动带登录态——「登录→越权→回读」
+  成为基本能力。
+- **poc_scaffold 脚手架**：按类别（sqli/ssti/lfi/ssrf/idor/jwt/upload/cmdi/race）
+  生成可运行的 Python 验证骨架——基线对照/载荷表/命中判据/多身份模板写好落
+  shared/scripts，改参数即可运行。
+- **job_start/status/output/stop 后台作业**：长扫描/爆破落任务级 shared/jobs，
+  run 结束后进程继续跑，后续任意意图或 planner 取结果——长任务不再因单意图
+  墙钟被丢弃重做。
+- **攻击链自动续跳**：report_finding 登记 high/critical 新漏洞后按类别自动派
+  「继续打穿」继任意图（注入→取数、RCE/上传→凭据配置、越权→批量回读、
+  SSRF→内网、凭据→横向），回执带 chain_intent_id；重复上报（已合并）不续跳。
+- **record_fact 新颖性门槛**：与最近事实高度相似（字符二元组 Jaccard ≥0.85）或
+  无 evidence 标 [low_novelty]——仍入库但不计入「有产出」，堵「写无关事实续命」。
+- **任务级共享脚本**：save_script/run_script 把登录脚本/PoC 放 tasks/<id>/shared/
+  scripts 跨意图复用。
+
+### 修复
+
+- **目标完成判定不可绕过**（goal_met 闸门）：只要还有目标未 met，整体收官直接
+  返回错误并列出未达成目标；收尾终态统一按目标进度判定——只有全目标达成才落
+  done，否则 timeout（界面显示「未完成·已停止」）。
+- **kill_work 先收尾写回**：60 秒宽限让 worker 把已确认内容落库后再取消——
+  现场多次 kill 直接丢工作的问题修复。
+
 ## [0.4.63] - 2026-11-10
 
 > 品牌与作业纪律更新：全新 Logo、写回授权边界守卫、空报告自动巡检、

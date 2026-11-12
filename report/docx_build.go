@@ -23,6 +23,8 @@ type TaskDocxInput struct {
 	GeneratedAt time.Time
 	AssetCounts map[string]int
 	Findings    []*db.DBFinding
+	// Goals 是逐条任务目标及其达成状态（红队版 v0.6.31 下放）；nil = 报告省略「目标达成情况」。
+	Goals []GoalLine
 	// AssetNames 资产 id → 可读名（域名/IP/URL）。nil/缺项回退 "id:N"（A8）。
 	AssetNames map[int64]string
 	// Retests finding id → 复测记录（最新在前）。报告带「复测记录」小节（A9）。
@@ -142,6 +144,25 @@ func BuildTaskDocx(in TaskDocxInput) *Docx {
 	if in.Goal != "" {
 		d.H2("任务目标")
 		d.P(in.Goal)
+	}
+	// 目标达成情况（红队版 v0.6.31 下放）：逐条列出是否被证明，未全部达成时明确标注。
+	if len(in.Goals) > 0 {
+		met, total := GoalTally(in.Goals)
+		d.H2("目标达成情况")
+		if met < total {
+			d.P(fmt.Sprintf("共 %d 个任务目标，已证明达成 %d 个；未达成目标如实记录，本次任务按「未完成」归档。", total, met))
+		} else {
+			d.P(fmt.Sprintf("共 %d 个任务目标，全部已由可复现证据证明达成。", total))
+		}
+		rows := make([][]string, 0, len(in.Goals))
+		for _, g := range in.Goals {
+			state := "未达成"
+			if g.Met() {
+				state = "已达成"
+			}
+			rows = append(rows, []string{g.Text, state, nz(g.Criteria, "—")})
+		}
+		d.Table([]string{"目标", "状态", "验收标准"}, rows)
 	}
 	d.H2("测试窗口")
 	if in.TestWindow != "" {
