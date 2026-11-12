@@ -36,6 +36,14 @@
 curl -fsSL https://github.com/chu0119/Pojun/releases/latest/download/install.sh | sudo bash
 ```
 
+**macOS 13+（Apple Silicon / Intel，预编译包直跑）：**
+
+```bash
+# 到 Releases 下载 pojun-<版本>-darwin-arm64.zip（M 系列）或 -amd64.zip（Intel），解压后：
+cp config.example.json config.json    # 填好 database 连接（brew install postgresql@16）
+./start.sh                            # → http://localhost:8787
+```
+
 **Windows / 已有 Docker（工具链全在镜像里，宿主机零安装）：**
 
 ```bash
@@ -455,8 +463,10 @@ cp config.example.json config.json   # 填好 database 连接
 cd web && npm ci && npm run build:static && cd ..
 cp -r web/out server/webui/dist
 CGO_ENABLED=0 go build -tags embedui -o pojun ./cmd/pojun
-CGO_ENABLED=0 go build -o pojun-hostd ./cmd/pojun-hostd   # 可选：特权安装助手
+CGO_ENABLED=0 go build -o pojun-hostd ./cmd/pojun-hostd   # 可选：特权安装助手（Linux）
 ./start.sh
+# 交叉编译其他平台示例（macOS Apple Silicon）：
+# CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -tags embedui -o pojun-darwin-arm64 ./cmd/pojun
 ```
 
 ### 公网部署
