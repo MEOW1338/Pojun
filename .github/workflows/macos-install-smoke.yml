@@ -54,7 +54,23 @@ jobs:
           grep -q "SHA256 校验通过" /tmp/install.log
           grep -q "数据库 pojun 就绪" /tmp/install.log
           grep -q "launchd 服务已注册" /tmp/install.log
-          grep -q "服务已就绪" /tmp/install.log
+          # 诊断：中文 grep 在 macos runner 上曾莫名失败——失败时 dump 字节真相
+          grep -q "服务已就绪" /tmp/install.log || {
+            echo "── milestone '服务已就绪' grep failed, dumping bytes ──"
+            locale
+            tail -c 800 /tmp/install.log | od -c | tail -30
+            python3 - <<'PY'
+data = open('/tmp/install.log', 'rb').read()
+needle = '服务已就绪'.encode('utf-8')
+print('utf8 needle present:', needle in data)
+try:
+    data.decode('utf-8')
+    print('whole log decodes as utf8: yes')
+except UnicodeDecodeError as e:
+    print('whole log decodes as utf8: NO ->', e)
+PY
+            exit 1
+          }
 
       - name: Verify service (launchd / health / database)
         run: |
