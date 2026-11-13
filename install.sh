@@ -1049,6 +1049,32 @@ install_tools(){
   install_pip_tools
   install_browser_mcp
   install_fonts
+  # catalog 预装（v0.4.68）：宿主助手按 90 项工具目录补齐上面未覆盖的
+  # （移动逆向/内网穿透/二进制利用等），与 Web 一键安装同一套清单。
+  install_catalog_tools
+}
+
+# ── catalog 预装：复用 hostd 的白名单配方与串行队列 ──────────
+# 为什么放在最后一棒：apt 基础包与 GitHub 表驱动安装是验证最久的路径，
+# catalog 只补它们没覆盖的工具（幂等：已可用的会跳过）。
+install_catalog_tools(){
+  local bin="/usr/local/bin/pojun-hostd"
+  if [ ! -x "$bin" ]; then
+    warn "  未安装 pojun-hostd，跳过 catalog 预装（Web 端仍可一键安装）"
+    return 0
+  fi
+  info "按 catalog 预装缺失工具（首次较慢：apt/pip/GitHub 全量）..."
+  local was_active=0
+  if systemctl is-active --quiet pojun-hostd 2>/dev/null; then
+    was_active=1
+    systemctl stop pojun-hostd 2>/dev/null || true
+  fi
+  if "$bin" -install-all; then
+    ok "catalog 工具预装完成"
+  else
+    warn "catalog 工具预装部分失败；可在 Web「系统 → 宿主环境」逐项重试"
+  fi
+  [ "$was_active" = "1" ] && systemctl start pojun-hostd 2>/dev/null || true
 }
 
 # ── 公文字体：报告 PDF 渲染 ────────────────────────

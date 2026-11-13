@@ -486,6 +486,131 @@ type IntentCleanup struct {
 // 删除原因记入 delete_reason 字段,保留意图节点及其全部产出/血缘(不再像旧实现那样在图上
 // 另挂一条 fact)。返回删除前意图的 summary,供 planner 通知使用。副会话随删除态一并清理。
 // 调用方须先停掉运行中的 worker,避免其后续写入。
+// CountActiveIntents 返回未完成意图数（open+running），用于派发节流阈值。
+func (s *ExplorationStore) CountActiveIntents() (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM exploration_nodes
+WHERE exploration_id=$1 AND kind='intent' AND state IN ('open','running')`, s.expID).Scan(&n)
+	return n, err
+}
+
+// IntentHygiene 是规划轮「积压治理」的单条视图：这条 open 意图排了多久，
+// 以及它的锚点事实是否已被后续事实显式否定（例如 #5263 推翻 #5224 的目标）。
+type IntentHygiene struct {
+	ID       int64    `json:"id"`
+	Summary  string   `json:"summary"`
+	Priority int      `json:"priority"`
+	AgeHours float64  `json:"age_hours"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// premiseNegationRe 识别「后续事实明确否定前一条」的措辞。#NNN 引用 + 否定词
+// 同时出现才算命中——只认这一种强信号，避免把「部分成立」「不排除」误判成作废。
+const premiseNegationRe = `(不成立|已推翻|推翻|否定|证伪|已过期|死目标|不可用|无效|与事实不符)`
+
+// OpenIntentHygiene 列出「排太久」或「前提疑似失效」的 open 意图。
+func (s *ExplorationStore) OpenIntentHygiene(staleAfter time.Duration, limit int) ([]IntentHygiene, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 40
+	}
+	rows, err := s.db.Query(`SELECT id, priority, created_at, COALESCE(payload->>'summary','')
+FROM exploration_nodes
+WHERE exploration_id=$1 AND kind='intent' AND state='open'
+ORDER BY created_at ASC LIMIT $2`, s.expID, limit)
+	if err != nil {
+		return nil, err
+	}
+	type openIntent struct {
+		IntentHygiene
+		created time.Time
+	}
+	var all []openIntent
+	for rows.Next() {
+		var it openIntent
+		if err := rows.Scan(&it.ID, &it.Priority, &it.created, &it.Summary); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		all = append(all, it)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	out := make([]IntentHygiene, 0, len(all))
+	for _, it := range all {
+		it.AgeHours = now.Sub(it.created).Hours()
+		// 锚点事实（derived_from 的 fact 父节点）是否被更新的事实否定。
+		parents, err := s.db.Query(`SELECT n.id
+FROM exploration_edges e JOIN exploration_nodes n ON n.id=e.src_id AND n.kind='fact'
+WHERE e.exploration_id=$1 AND e.dst_id=$2 AND e.rel='derived_from'`, s.expID, it.ID)
+		if err != nil {
+			return nil, err
+		}
+		var pids []int64
+		for parents.Next() {
+			var pid int64
+			if err := parents.Scan(&pid); err != nil {
+				parents.Close()
+				return nil, err
+			}
+			pids = append(pids, pid)
+		}
+		parents.Close()
+		for _, pid := range pids {
+			var newer string
+			err := s.db.QueryRow(`SELECT COALESCE(payload->>'summary','') FROM exploration_nodes
+WHERE exploration_id=$1 AND kind='fact' AND id > $2
+  AND payload->>'summary' ~ ('#' || $2 || '([^0-9]|$)')
+  AND payload->>'summary' ~ $3
+ORDER BY id DESC LIMIT 1`, s.expID, pid, premiseNegationRe).Scan(&newer)
+			if err == nil && newer != "" {
+				it.Warnings = append(it.Warnings, fmt.Sprintf("锚点 fact#%d 疑似被后续 fact 否定：%s", pid, clampRunes(newer, 80)))
+			} else if err != nil && err != sql.ErrNoRows {
+				return nil, err
+			}
+		}
+		if it.AgeHours >= staleAfter.Hours() || len(it.Warnings) > 0 {
+			out = append(out, it.IntentHygiene)
+		}
+	}
+	return out, nil
+}
+
+// clampRunes 截断到 n 个字符（用于把事实摘要塞进提示词/日志）。
+func clampRunes(s string, n int) string {
+	r := []rune(strings.TrimSpace(s))
+	if len(r) <= n {
+		return string(r)
+	}
+	return string(r[:n]) + "…"
+}
+
+// NodeStates 批量返回本任务内指定节点的 state（缺失 id 不出现在结果里）。
+// 用于领取意图时一次性判定 requires_intents 是否都已了结，避免每个候选逐条查库。
+func (s *ExplorationStore) NodeStates(ids []int64) (map[int64]string, error) {
+	out := make(map[int64]string, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.Query(`SELECT id, state FROM exploration_nodes
+WHERE exploration_id=$1 AND id = ANY($2)`, s.expID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var st string
+		if err := rows.Scan(&id, &st); err != nil {
+			return nil, err
+		}
+		out[id] = st
+	}
+	return out, rows.Err()
+}
+
 func (s *ExplorationStore) SoftDeleteIntent(id int64, reason string) (string, error) {
 	tx, err := s.db.Begin()
 	if err != nil {

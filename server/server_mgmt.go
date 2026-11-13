@@ -78,7 +78,17 @@ func pathInt(r *http.Request, name string) (int64, bool) {
 	return n, err == nil
 }
 
-func decode(r *http.Request, v any) error { return json.NewDecoder(r.Body).Decode(v) }
+// decode parses a JSON request body. A hard ceiling keeps a single authenticated
+// caller from making the process buffer an unbounded body; upload endpoints use
+// their own streaming limits and do not call this helper.
+const maxJSONBodyBytes = 16 << 20
+
+func decode(r *http.Request, v any) error {
+	if r.Body != nil {
+		r.Body = http.MaxBytesReader(nil, r.Body, maxJSONBodyBytes)
+	}
+	return json.NewDecoder(r.Body).Decode(v)
+}
 
 // ---------- tasks (delete) ----------
 
@@ -1450,12 +1460,27 @@ func (s *Server) fsUploadSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 覆盖安装：旧目录先改名备份，新目录成功后再清理；换名失败则恢复旧目录。
+	// 直接 RemoveAll 再安装，一旦 Rename 失败（磁盘满/权限）旧技能就永久丢了。
+	backup := ""
 	if overwrite {
-		_ = os.RemoveAll(skillPath)
+		if _, err := os.Stat(skillPath); err == nil {
+			backup = skillPath + ".backup-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+			if err := os.Rename(skillPath, backup); err != nil {
+				writeErr(w, 500, "备份旧 skill 失败："+err.Error())
+				return
+			}
+		}
 	}
 	if err := os.Rename(tmp, skillPath); err != nil {
+		if backup != "" {
+			_ = os.Rename(backup, skillPath)
+		}
 		writeErr(w, 500, "安装失败："+err.Error())
 		return
+	}
+	if backup != "" {
+		_ = os.RemoveAll(backup)
 	}
 	writeJSON(w, 201, map[string]any{"name": name, "files": entries})
 }

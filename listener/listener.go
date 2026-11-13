@@ -26,6 +26,9 @@ import (
 const (
 	// MaxCapturePerSession 是单个会话捕获的字节上限（防灌爆）。
 	MaxCapturePerSession = 64 * 1024
+	// MaxSessionsPerListener 是每个监听器保留的会话上限。监听器按设计对公网开放，
+	// 不限量的话一个扫描器就能把会话列表和 goroutine 堆到内存耗尽。
+	MaxSessionsPerListener = 2000
 	// MinPort/MaxPort 是允许绑定的端口范围。
 	MinPort = 1024
 	MaxPort = 65535
@@ -42,6 +45,8 @@ type Session struct {
 	// 反弹 shell 的初始输出、OOB 请求行、banner 都在这里。
 	Preview string `json:"preview"`
 	Open    bool   `json:"open"`
+
+	conn net.Conn // 会话超限被淘汰时用它断开，让读 goroutine 自然退出
 }
 
 // Listener 是一个运行中的回连接收器。
@@ -57,11 +62,27 @@ type Listener struct {
 	stop context.CancelFunc
 }
 
-// appendSession 记录新连接。
+// appendSession 记录新连接；会话数达到上限时先淘汰最老的已关闭会话，
+// 若全都还开着则淘汰最老的一条并断开它，保证会话列表有界。
 func (l *Listener) appendSession(s *Session) {
+	var evicted *Session
 	l.mu.Lock()
+	if len(l.Sessions) >= MaxSessionsPerListener {
+		drop := 0
+		for i := range l.Sessions {
+			if !l.Sessions[i].Open {
+				drop = i
+				break
+			}
+		}
+		evicted = l.Sessions[drop]
+		l.Sessions = append(l.Sessions[:drop], l.Sessions[drop+1:]...)
+	}
 	l.Sessions = append(l.Sessions, s)
 	l.mu.Unlock()
+	if evicted != nil && evicted.conn != nil {
+		_ = evicted.conn.Close()
+	}
 }
 
 // Snapshot 返回会话列表的拷贝（按连接时间倒序，最新的在前）。
@@ -149,10 +170,14 @@ func (l *Listener) handleConn(conn net.Conn) {
 		Remote:      conn.RemoteAddr().String(),
 		ConnectedAt: time.Now(),
 		Open:        true,
+		conn:        conn,
 	}
 	l.appendSession(s)
 	defer func() {
+		// 字段写入必须与 Snapshot 的读取同锁，否则悬空读（-race 会报）。
+		l.mu.Lock()
 		s.Open = false
+		l.mu.Unlock()
 		_ = conn.Close()
 	}()
 	buf := make([]byte, 4096)
@@ -164,23 +189,19 @@ func (l *Listener) handleConn(conn net.Conn) {
 		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 		n, err := conn.Read(buf)
 		if n > 0 {
+			l.mu.Lock()
 			s.LastActive = time.Now()
+			s.BytesIn += int64(n)
 			if captured < MaxCapturePerSession {
 				take := n
 				if captured+take > MaxCapturePerSession {
 					take = MaxCapturePerSession - captured
 				}
-				l.mu.Lock()
-				s.BytesIn += int64(n)
 				s.Preview += string(buf[:take])
 				// 丢弃非可打印垃圾的粗处理交给序列化端（JSON 会转义），这里不洗。
-				l.mu.Unlock()
 				captured += take
-			} else {
-				l.mu.Lock()
-				s.BytesIn += int64(n)
-				l.mu.Unlock()
 			}
+			l.mu.Unlock()
 		}
 		if err != nil {
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {

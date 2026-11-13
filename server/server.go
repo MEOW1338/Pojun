@@ -773,6 +773,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/tasks/{id}/constraints/{cid}", s.editConstraint)    // 约束管理:修改约束
 	mux.HandleFunc("DELETE /api/tasks/{id}/constraints/{cid}", s.deleteConstraint) // 约束管理:删除约束
 	mux.HandleFunc("POST /api/tasks/{id}/control", s.control)
+	mux.HandleFunc("POST /api/tasks/{id}/autopilot", s.taskAutopilot) // 一键自主推进（开关 + 可选恢复）
 	mux.HandleFunc("PUT /api/tasks/{id}/llm", s.updateTaskLLMProfiles)
 	mux.HandleFunc("GET /api/tasks/{id}/llm/resolution", s.taskLLMResolutionHandler)
 	mux.HandleFunc("POST /api/tasks/{id}/intents/{iid}/control", s.controlIntent)
@@ -1201,6 +1202,57 @@ func (s *Server) setActive(w http.ResponseWriter, r *http.Request) {
 		s.engine.Run(s.ctx, t)
 	}
 	writeJSON(w, 200, map[string]any{"active": req.ID})
+}
+
+// taskAutopilot 开启/关闭单任务的「自主推进」。
+//
+// enabled=true + resume=true 就是「一键推进」：暂停/排队中的任务会被立即恢复并唤醒
+// planner；已经结束的任务拒绝（要先复跑意图或新增目标把它救活），避免界面暗示一个
+// 已经收尾的任务还能被这个按钮续命。
+func (s *Server) taskAutopilot(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	t, ok := s.m.Task(id)
+	if !ok {
+		writeErr(w, 404, "task not found")
+		return
+	}
+	var req struct {
+		Enabled *bool `json:"enabled"`
+		Resume  bool  `json:"resume"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Enabled == nil {
+		writeErr(w, 400, "enabled 必填（true|false）")
+		return
+	}
+	ls := t.lifecycleSnapshot()
+	if *req.Enabled && req.Resume && isTerminalStatus(ls.Status) {
+		writeErr(w, 409, "任务已结束，请先复跑意图或新增目标恢复后再开启自主推进")
+		return
+	}
+	updated, err := s.m.SetTaskAutopilot(id, *req.Enabled)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	resumed := false
+	status := ls.Status
+	if updated != nil {
+		status = updated.lifecycleSnapshot().Status
+		if *req.Enabled {
+			if cur := updated.lifecycleSnapshot(); req.Resume && (cur.Paused || cur.Queued) {
+				if _, err := s.applyTaskControl(updated, "resume"); err != nil {
+					writeErr(w, 409, err.Error())
+					return
+				}
+				resumed = true
+				status = updated.lifecycleSnapshot().Status
+			}
+			updated.Notify() // 唤醒 planner 立刻按自主推进模式规划
+		}
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok": true, "autopilot": *req.Enabled, "resumed": resumed, "status": status,
+	})
 }
 
 // control pauses/resumes a task's autonomous execution (planner + workers).
@@ -3499,6 +3551,7 @@ func (s *Server) settingsPayload() map[string]any {
 		concLimit = defaultConcurrencyLimit // 关闭时也回显一个合理默认值给 UI
 	}
 	af := autoFinishConfigFromPG(s.m.pg)
+	apc := autopilotConfigFromPG(s.m.pg)
 	ib := intentBudgetFromPG(s.m.pg)
 	return map[string]any{
 		"traffic_capture":       s.m.TrafficEnabled(),
@@ -3528,6 +3581,14 @@ func (s *Server) settingsPayload() map[string]any {
 		"auto_finish_min_rounds":   af.MinRounds,
 		"auto_finish_coverage_pct": af.CoveragePct,
 		"auto_finish_max_rounds":   af.MaxRounds,
+		// 派发节流（v0.4.68）：本轮新增上限阈值；串行前置闸门默认关。
+		"intent_queue_limit":    intentQueueLimitFromPG(s.m.pg),
+		"intent_requires_gate":  intentRequiresGateFromPG(s.m.pg),
+		// 自主推进（v0.4.68）：默认开关 / 停滞窗口 / deadline 延长上限 / 续杯波次。
+		"autopilot_default":        apc.Default,
+		"autopilot_stall_minutes":  apc.StallMinutes,
+		"autopilot_max_extensions": apc.MaxExtensions,
+		"autopilot_extend_waves":   autopilotExtendWavesFromPG(s.m.pg),
 		// 意图级软预算（v0.4.28）：单意图 token 到顶注入收尾提醒（不杀进程）。
 		"intent_budget_enabled": ib.Enabled,
 		"intent_budget_tokens":  ib.Tokens,
@@ -3635,6 +3696,14 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		NotifyCrossTaskDedup *bool `json:"notify_cross_task_dedup"`
 		// 纵深缺口提醒（v0.4.63）。
 		DepthNudgeEnabled *bool `json:"depth_nudge_enabled"`
+		// 自主推进（v0.4.68）：默认开关 / 停滞窗口 / deadline 延长上限 / 续杯波次。
+		AutopilotDefault       *bool `json:"autopilot_default"`
+		AutopilotStallMinutes  *int  `json:"autopilot_stall_minutes"`
+		AutopilotMaxExtensions *int  `json:"autopilot_max_extensions"`
+		AutopilotExtendWaves   *int  `json:"autopilot_extend_waves"`
+		// 派发节流（v0.4.68）。
+		IntentQueueLimit   *int  `json:"intent_queue_limit"`
+		IntentRequiresGate *bool `json:"intent_requires_gate"`
 		// 证据逐字回验（v0.4.29）：off|warn|block；工具输出注入告警开关。
 		EvidenceVerify *string `json:"finding_evidence_verify"`
 		InjectionGuard *bool   `json:"tool_output_injection_guard"`
@@ -3861,6 +3930,58 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.DepthNudgeEnabled != nil {
 		if err := s.m.pg.SetBool("depth_nudge_enabled", *req.DepthNudgeEnabled); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.IntentQueueLimit != nil {
+		if *req.IntentQueueLimit < 0 || *req.IntentQueueLimit > 200 {
+			writeErr(w, 400, "intent_queue_limit 必须在 0–200 之间（0=关闭节流）")
+			return
+		}
+		if err := s.m.pg.SetSetting(settingIntentQueueLimit, strconv.Itoa(*req.IntentQueueLimit)); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.IntentRequiresGate != nil {
+		if err := s.m.pg.SetBool(settingIntentRequiresGate, *req.IntentRequiresGate); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.AutopilotDefault != nil {
+		if err := s.m.pg.SetBool(settingAutopilotDefault, *req.AutopilotDefault); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.AutopilotStallMinutes != nil {
+		if *req.AutopilotStallMinutes < 3 || *req.AutopilotStallMinutes > 120 {
+			writeErr(w, 400, "autopilot_stall_minutes 必须在 3–120 之间")
+			return
+		}
+		if err := s.m.pg.SetSetting(settingAutopilotStallMinutes, strconv.Itoa(*req.AutopilotStallMinutes)); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.AutopilotMaxExtensions != nil {
+		if *req.AutopilotMaxExtensions < 0 || *req.AutopilotMaxExtensions > 10 {
+			writeErr(w, 400, "autopilot_max_extensions 必须在 0–10 之间（0=不延长）")
+			return
+		}
+		if err := s.m.pg.SetSetting(settingAutopilotMaxExtensions, strconv.Itoa(*req.AutopilotMaxExtensions)); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.AutopilotExtendWaves != nil {
+		if *req.AutopilotExtendWaves < 0 || *req.AutopilotExtendWaves > 10 {
+			writeErr(w, 400, "autopilot_extend_waves 必须在 0–10 之间（0=关闭续杯）")
+			return
+		}
+		if err := s.m.pg.SetSetting(settingAutopilotExtendWaves, strconv.Itoa(*req.AutopilotExtendWaves)); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}
@@ -4329,6 +4450,13 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeErr(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]any{"error": msg})
+}
+
+// writeInternalError returns a generic 5xx message to the caller and logs the real
+// cause server-side: database/driver details must not reach the browser.
+func writeInternalError(w http.ResponseWriter, scope string, err error) {
+	log.Printf("[api] %s: %v", scope, err)
+	writeErr(w, http.StatusInternalServerError, "服务器内部错误")
 }
 
 func atoiDefault(s string, d int) int {

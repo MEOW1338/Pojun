@@ -90,8 +90,13 @@ func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) hook.Result {
 		_ = json.Unmarshal(ev.Input, &in)
 		cmd = in.Text
 	}
-	g.record(ev.ToolName, "allow", "", cmd)
-	return g.applyIntercept(ctx, ev)
+	// 审计只留一条：被拦截的调用由 block() 记 "block"，这里不再先记 "allow"，
+	// 否则同一次调用在审计里既像放行又像拦截，复盘时无法区分。
+	res := g.applyIntercept(ctx, ev)
+	if res.Decision != "block" {
+		g.record(ev.ToolName, "allow", "", cmd)
+	}
+	return res
 }
 
 // applyIntercept evaluates user-configured intercept rules against the tool call.

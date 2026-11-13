@@ -375,8 +375,15 @@ func renderIntentTask(intent *db.Node) string {
 			extra += fmt.Sprintf("\n成功判据（怎么算成了/没成）：%s", sc)
 		}
 	}
-	return fmt.Sprintf("\n\n【你领到的意图（本次唯一任务：只做这一条、只产生事实、做完即停）】：\n%s%s\n意图 id: %d（写回 record_fact / report_finding 时传它）", string(intent.Payload), extra, intent.ID)
+	return fmt.Sprintf("\n\n【你领到的意图（本次唯一任务：只做这一条、只产生事实、做完即停）】：\n%s%s\n意图 id: %d（写回 record_fact / report_finding 时传它）%s", string(intent.Payload), extra, intent.ID, premiseCheckHint)
 }
+
+// premiseCheckHint 是「前提核对」硬提醒：意图是 planning 时的快照，排队期间目标
+// 可能已被证伪（任务实测：一条意图在死目标上跑了 3 小时）。开跑前先用最新事实核对，
+// 失效就写一条 fact 收场，别硬跑。
+const premiseCheckHint = "\n\n【执行前先核对前提（重要）】：开跑前用 list_facts / graph_overview 核对你这条意图的假设与目标是否仍成立。" +
+	"若最新事实已明确否定它（目标被证实是死目标、真实入口已在别处、该方向已被结论排除），不要硬跑：" +
+	"用 record_fact 写一条「意图前提已失效：原因 + 依据 fact id」后结束，把方向交回规划者重派。"
 
 // resumeBrief 续跑摘要（v0.3.95 B9）：上次状态 + 收场原因 + 图上已挂产出。
 // 数据全部来自探索图（intent 节点自身 + FactsYielded 血缘），不依赖引擎传值。
@@ -549,6 +556,8 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	if b := priorFactsBlock(ts, ids, 8); b != "" {
 		sysBody += b
 	}
+	// 自主推进：本意图必须被证实/证伪，不得空转收场。
+	sysBody += autopilotTail(ctx, autopilotWorkerGuidance)
 	sysBody += "\n\n开始执行上面这条意图：只做它、只产生事实、assets、finding、做完即停。"
 	system, boundary := deferredSystem(sysBody, def)
 	// 任务级 deadline(经 ctx 注入)夹逼本 run 的墙钟预算 + 决定收尾词(见 taskclock.go)。

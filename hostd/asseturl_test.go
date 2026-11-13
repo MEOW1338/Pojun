@@ -71,7 +71,7 @@ func TestAssetURLMatchesRealReleaseNames(t *testing.T) {
 func TestNoUnknownPlaceholdersInTemplates(t *testing.T) {
 	known := map[string]bool{
 		"{ver}": true, "{verv}": true,
-		"{arch}": true, "{arch2}": true, "{arch3}": true, "{arch4}": true,
+		"{arch}": true, "{arch2}": true, "{arch3}": true, "{arch4}": true, "{arch5}": true,
 	}
 	for _, tool := range hosttools.Catalog() {
 		if tool.Kind != hosttools.KindGitHub {

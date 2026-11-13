@@ -4,6 +4,8 @@ package config
 
 import (
 	"encoding/json"
+	"log"
+	"sync"
 	"fmt"
 	"net/url"
 	"os"
@@ -98,13 +100,22 @@ func Path() string {
 
 // Load reads and parses the config file. A missing/unreadable file yields a zero
 // Config (so callers fall back to defaults) rather than an error.
+// configErrOnce 保证配置解析错误只报一次：Load 会被多处高频调用，重复刷日志没意义。
+var configErrOnce sync.Once
+
 func Load() Config {
 	var c Config
 	b, err := os.ReadFile(Path())
 	if err != nil {
 		return c
 	}
-	_ = json.Unmarshal(b, &c)
+	if err := json.Unmarshal(b, &c); err != nil {
+		// 静默回退默认值会让操作员完全无感；记一次日志，仍返回零值。
+		configErrOnce.Do(func() {
+			log.Printf("[config] 配置文件 %s 解析失败，已回退到默认值：%v", Path(), err)
+		})
+		return Config{}
+	}
 	return c
 }
 

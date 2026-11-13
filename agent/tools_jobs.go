@@ -23,9 +23,11 @@ package agent
 // 都在任务目录内，受同一套审计留痕。
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -286,14 +288,109 @@ func (t *ToolSet) jobStatus() actool.CoreTool {
 	)
 }
 
+// jobLogLineMax 单行保留上限。长扫描可能吐出超长单行（进度条 / base64），
+// 整行读进内存会把进程拖垮；超长部分截断并标记。
+const jobLogLineMax = 4 << 10
+
+// readLogLine 读一行，超过 jobLogLineMax 的尾部丢弃（IO 仍消费完，行号才不会错）。
+func readLogLine(r *bufio.Reader) (string, bool, error) {
+	var sb strings.Builder
+	truncated := false
+	for {
+		frag, err := r.ReadSlice('\n')
+		if sb.Len() < jobLogLineMax {
+			room := jobLogLineMax - sb.Len()
+			if len(frag) > room {
+				sb.Write(frag[:room])
+				truncated = true
+			} else {
+				sb.Write(frag)
+			}
+		} else if len(frag) > 0 {
+			truncated = true
+		}
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		line := strings.TrimRight(sb.String(), "\r\n")
+		if truncated {
+			line += " …(行超长已截断)"
+		}
+		if err == io.EOF {
+			if line == "" {
+				return "", false, io.EOF
+			}
+			return line, true, nil
+		}
+		if err != nil {
+			return line, line != "", err
+		}
+		return line, true, nil
+	}
+}
+
+// readJobLog 返回日志的 [offset, offset+limit) 行窗口与总行数。
+//
+// offset == 0 表示「读尾部 limit 行」：用环形缓冲只保留最后 limit 行，
+// 内存不随日志大小增长（旧实现 os.ReadFile 整份读入，几 GB 的扫描日志会直接 OOM）。
+func readJobLog(path string, offset, limit int) (window []string, total int, err error) {
+	if limit <= 0 {
+		limit = 1 // 环形缓冲要取模，0 会 panic
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer f.Close()
+	r := bufio.NewReaderSize(f, 64<<10)
+	if offset <= 0 {
+		ring := make([]string, limit)
+		filled, pos := 0, 0
+		for {
+			line, ok, rerr := readLogLine(r)
+			if ok {
+				ring[pos] = line
+				pos = (pos + 1) % limit
+				if filled < limit {
+					filled++
+				}
+				total++
+			}
+			if rerr == io.EOF {
+				break
+			}
+			if rerr != nil {
+				return nil, total, rerr
+			}
+		}
+		out := make([]string, 0, filled)
+		for i := 0; i < filled; i++ {
+			out = append(out, ring[(pos-filled+i+limit)%limit])
+		}
+		return out, total, nil
+	}
+	for {
+		line, ok, rerr := readLogLine(r)
+		if ok {
+			if total >= offset && len(window) < limit {
+				window = append(window, line)
+			}
+			total++
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			return window, total, rerr
+		}
+	}
+	return window, total, nil
+}
+
 func tailLines(path string, n int) string {
-	b, err := os.ReadFile(path)
+	lines, _, err := readJobLog(path, 0, n)
 	if err != nil {
 		return ""
-	}
-	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
 }
@@ -327,11 +424,6 @@ func (t *ToolSet) jobOutput() actool.CoreTool {
 			if !ok {
 				return actool.Errorf("作业不存在: " + name), nil
 			}
-			b, err := os.ReadFile(m.Log)
-			if err != nil {
-				return actool.Errorf("读取日志失败: " + err.Error()), nil
-			}
-			all := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
 			lines := a.Lines
 			if lines <= 0 {
 				lines = 200
@@ -343,23 +435,25 @@ func (t *ToolSet) jobOutput() actool.CoreTool {
 			if start < 0 {
 				start = 0
 			}
-			if start == 0 && len(all) > lines {
-				start = len(all) - lines
+			window, total, err := readJobLog(m.Log, start, lines)
+			if err != nil {
+				return actool.Errorf("读取日志失败: " + err.Error()), nil
 			}
-			if start > len(all) {
-				start = len(all)
+			from := start
+			if start == 0 && len(window) < total {
+				from = total - len(window) // offset=0 是「读尾部」，起始行按实际窗口回推
 			}
-			end := start + lines
-			if end > len(all) {
-				end = len(all)
+			if from > total {
+				from = total
 			}
+			end := from + len(window)
 			state, code := jobState(m)
 			res := map[string]any{
 				"name": name, "state": state, "exit_code": code,
-				"total_lines": len(all), "from_line": start, "to_line": end,
-				"output": strings.Join(all[start:end], "\n"),
+				"total_lines": total, "from_line": from, "to_line": end,
+				"output": strings.Join(window, "\n"),
 			}
-			if end < len(all) {
+			if end < total {
 				res["next_offset"] = end
 			}
 			return jsonResult(res)

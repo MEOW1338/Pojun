@@ -127,10 +127,11 @@ func TestManualToolNotInstallable(t *testing.T) {
 	if !ok {
 		t.Fatal("catalog 里应有 msfconsole")
 	}
-	if msf.Installable {
-		t.Error("msfconsole 应标记为不可一键安装")
+	// v0.4.68：msfconsole 走 script 安装（外层仓库脚本），catalog 已无 manual 项。
+	if !msf.Installable {
+		t.Error("msfconsole 应标记为可一键安装（script）")
 	}
-	if msf.Kind != hosttools.KindManual {
+	if msf.Kind != hosttools.KindScript {
 		t.Errorf("msfconsole kind 应为 manual,得到 %q", msf.Kind)
 	}
 }

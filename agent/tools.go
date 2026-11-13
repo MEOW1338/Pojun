@@ -118,6 +118,15 @@ type ToolSet struct {
 	// record_fact call that do NOT exist in the asset table. The tool result
 	// reports them back so the model stops reusing a fabricated id.
 	lastMissingAssets []int64
+	// ── 派发节流（v0.4.68）──
+	// intentQueue 返回 (阈值, worker 数)；nil = 不限制（测试/主 agent 场景）。
+	intentQueue func() (int, int)
+	// intentAdded 是本次 ToolSet 生命周期内新增的意图数（每轮规划一个新 ToolSet）。
+	intentAdded int
+	// retiredThisRun 是本轮规划已退役的意图数（护栏：每轮 6 条）。
+	retiredThisRun int
+	// intentRequiresGate 控制 requires_intents 串行闸门是否生效（默认关）。
+	intentRequiresGate bool
 	// killWork, if set, terminates a running work by intent id (engine callback,
 	// wired by the planner). nil = the kill_work tool reports unavailable.
 	killWork func(intentID int64) error
@@ -1281,6 +1290,8 @@ type intentItem struct {
 	Hypothesis string `json:"hypothesis"`
 	// SuccessCriteria 怎么算成了/没成（可选）：期望拿到的 fact/finding 形态。
 	SuccessCriteria string `json:"success_criteria"`
+	// RequiresIntents 是严格串行链的先决意图 id（平台开关关闭时仅作记录）。
+	RequiresIntents []json.RawMessage `json:"requires_intents"`
 }
 
 // addOneIntent 创建一条意图节点并连上游血缘，返回 id。
@@ -1363,6 +1374,19 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 			"请改为：①换一种本质不同的打法（换入口/换方法/换目标面）；②或直接放弃这个方向，转向尚未覆盖的方向",
 			maxContinuationDepth, depth)
 	}
+	requires := pidList(it.RequiresIntents)
+	for _, rid := range requires {
+		rn, err := t.ts.GetNode(rid)
+		if err != nil || rn == nil {
+			return 0, fmt.Errorf("requires_intents %d 不存在于本任务：只能填本任务已存在的意图 id", rid)
+		}
+		if rn.Kind != db.KindIntent {
+			return 0, fmt.Errorf("requires_intents %d 是 %q 节点：只能填意图 id（前置是某条探索方向）", rid, rn.Kind)
+		}
+		if rn.State == "deleted" {
+			return 0, fmt.Errorf("requires_intents %d 已被删除，不能作为前置", rid)
+		}
+	}
 	anchors := pidList(it.AssetIDs)
 	// 资产拦截：意图绑定的资产若命中系统资产拦截规则，则禁止下发该意图。
 	if t.as != nil && len(anchors) > 0 {
@@ -1394,6 +1418,9 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 		payload["continues"] = continues
 		payload["continuation_depth"] = depth
 	}
+	if len(requires) > 0 {
+		payload["requires_intents"] = requires
+	}
 	// 派发去重：同任务里已有高度相似的 open/running 意图就不再重复下发——两条并行
 	// worker 干同一件事纯属浪费；planner 能看到提示并改写差异。
 	if existID, existSum, similar, err := t.ts.FindSimilarOpenIntent(summary); err == nil && similar {
@@ -1420,6 +1447,55 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 	return id, nil
 }
 
+// SetIntentQueueLimit 安装派发阈值 resolver（nil = 不限制）。
+func (t *ToolSet) SetIntentQueueLimit(fn func() (int, int)) { t.intentQueue = fn }
+
+// SetIntentRequiresGate 控制 requires_intents 串行闸门（默认关，只作记录）。
+func (t *ToolSet) SetIntentRequiresGate(on bool) { t.intentRequiresGate = on }
+
+// queueBudget 返回派发阈值与 worker 数；nil resolver = 0,0（不限制）。
+func (t *ToolSet) queueBudget() (limit, workers int) {
+	if t == nil || t.intentQueue == nil {
+		return 0, 0
+	}
+	return t.intentQueue()
+}
+
+// intentRoundAddCap 返回本轮还能新增的意图数上限（-1=不限），以及当前积压与阈值。
+//
+// 阈值 T = max(limit, 2*workers)：
+//   - active >= T      → 本轮 0 条（先等产出；规划轮本身照常跑，可读结果/证目标/写事实）
+//   - active >= T-2    → 本轮 1 条（只补最关键的下一步）
+//   - 其他              → 本轮 3 条
+func (t *ToolSet) intentRoundAddCap() (capN, active, threshold int) {
+	capN = -1
+	if t.worker != "planner" {
+		return
+	}
+	limit, workers := t.queueBudget()
+	if limit <= 0 || t.ts == nil {
+		return
+	}
+	n, err := t.ts.CountActiveIntents()
+	if err != nil {
+		return
+	}
+	active = n
+	threshold = limit
+	if 2*workers > threshold {
+		threshold = 2 * workers
+	}
+	switch {
+	case active >= threshold:
+		capN = 0
+	case active >= threshold-2:
+		capN = 1
+	default:
+		capN = 3
+	}
+	return
+}
+
 func (t *ToolSet) addIntent() actool.CoreTool {
 	return t.writeExpTool("add_intent", "生成【探索方向】写入 frontier，并连入探索链路。意图是开放的探索方向，不是固定类型——用 summary 一句话自由描述要探索/验证/利用什么。\n"+
 		"★优先批量：一轮筛出的多个新方向放进 intents 数组一次提交（比逐条调用省往返）。返回 ids 数组，与 intents 等长同序（失败项 id=0，详情见 errors）。单条则省略 intents 直接给顶层 summary。",
@@ -1430,6 +1506,7 @@ func (t *ToolSet) addIntent() actool.CoreTool {
 			"parent_ids":       map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "上游锚点 id（可选，0/1/多个）：本方向由哪些【已确认的事实(fact)/发现(finding)】综合得出。**只能填已存在的 fact/finding 节点 id,不能填意图/目标/提示**——意图必须锚在已确认知识上,发现驱动而非凭空规划。多个事实共同产生一个新意图就传多个;顶层全新侦察方向请留空（会自动挂到任务起点 origin fact）。"},
 			"continues":        map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "【仅当本方向是接续某条旧方向时填】上游【意图】节点 id（0/1/多个）——即本方向要接着哪条被掐断/被收口的意图继续做。**只在 summary 里明说「接续/继续 #NNN」时才填**，且必须与 summary 里提到的意图 id 一致。接续代数有上限（最多接 3 次），超了会被拒绝——到那时请换一种本质不同的打法或转向别的方向，别再接。顶层全新方向留空。"},
 			"priority":         intp("优先级 0-10，默认5。直接逼近目标的利用链步=8-10；新入口面首次探明=6-7；补覆盖/复核=3-4；纯情报=1-2。同轮多意图按价值区分，别全默认 5。"),
+			"requires_intents": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "【仅严格串行链使用】本方向依赖的先决意图 id：这些意图跑出结果前，本意图不会被 worker 领取（平台开关关闭时仅作记录）。只在上一步的**实际产出**是下一步输入时填；平行覆盖类方向不要填，否则会白白等待。"},
 			"hypothesis":       str("【建议填】本方向的假设：依据哪条 fact 的什么推测（引用 fact id）。worker 会以它为验证目标，你下轮判「有没有产出」也有对照锚。"),
 			"success_criteria": str("【建议填】怎么算成了/没成：期望拿到的 fact/finding 形态（如「拿到 admin cookie 的请求响应」/「证实参数 X 不可注入的输出」）。"),
 		}),
@@ -1445,17 +1522,31 @@ func (t *ToolSet) addIntent() actool.CoreTool {
 				items = []intentItem{a.intentItem}
 			}
 
-			ids := make([]int64, len(items))
+			origLen := len(items)
+			ids := make([]int64, origLen)
 			errs := map[string]string{}
 			createdAny := false
+			capN, active, threshold := t.intentRoundAddCap()
 			for i, it := range items {
+				if capN >= 0 && t.intentAdded >= capN {
+					errs[strconv.Itoa(i)] = fmt.Sprintf(
+						"派发节流：本任务未完成意图 %d 条（阈值 %d），本轮不再新增（已新建 %d 条）。"+
+							"先等 worker 产出再派，或把多个方向合并成一条；规划轮本身不受影响，"+
+							"仍可读结果、prove_goal、写 fact。设置 intent_queue_limit=0 可关闭节流。",
+						active, threshold, t.intentAdded)
+					continue
+				}
 				id, err := t.addOneIntent(it)
 				if err != nil {
 					errs[strconv.Itoa(i)] = err.Error()
 					continue
 				}
 				ids[i] = id
+				t.intentAdded++
 				createdAny = true
+			}
+			if len(items) < origLen {
+				ids = ids[:len(items)]
 			}
 
 			// 人经主 agent 直投意图 → 若任务已 done（无 open 目标的 goalless 分支），把它
@@ -1478,6 +1569,159 @@ func (t *ToolSet) addIntent() actool.CoreTool {
 			}
 			return jsonResult(out)
 		})
+}
+
+func (t *ToolSet) retireIntent() actool.CoreTool {
+	return t.writeExpTool("retire_intent",
+		"退役【尚未开始】的排队意图（open）。当你的新事实已否定某条意图的前提时调用，例如目标被证实是死目标、"+
+			"真实业务入口已在别处定位到、或该方向已被结论排除。退役不删除证据/血缘，只置为 deleted 并记录原因，"+
+			"之后不会再被 worker 领取。正在执行的意图不能退役——先用 kill_work 终止。\n"+
+			"护栏：每轮最多 6 条；因『重复』退役必须用 superseded_by 指明存活的替代意图（不能指向已退役的）；"+
+			"声称『前提失效』时必须在 reason 里引用否定它的事实/finding 节点号。",
+		obj(map[string]any{
+			"ids":    map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "要退役的意图节点 id（必须是 open 状态，可多条；本轮累计最多 6 条）"},
+			"reason": str("退役原因（必填）：写清哪条事实否定了它的前提，或为什么不再需要这条方向"),
+			"superseded_by": map[string]any{"type": "array", "items": map[string]any{"type": "integer"},
+				"description": "【因重复而退役时必填】替代它的存活意图 id（open/running/done）。禁止指向已 deleted 的意图——那会造成覆盖断链。前提失效类退役不需要填。"},
+		}, "ids", "reason"),
+		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+			var a struct {
+				IDs          []json.RawMessage `json:"ids"`
+				Reason       string            `json:"reason"`
+				SupersededBy []json.RawMessage `json:"superseded_by"`
+			}
+			_ = json.Unmarshal(in, &a)
+			ids := pidList(a.IDs)
+			reason := strings.TrimSpace(a.Reason)
+			sup := pidList(a.SupersededBy)
+			if len(ids) == 0 {
+				return actool.Errorf("ids 不能为空"), nil
+			}
+			if reason == "" {
+				return actool.Errorf("reason 必填：写清是哪条事实/结论否定了它的前提"), nil
+			}
+			if remaining := maxIntentRetirePerRun - t.retiredThisRun; remaining <= 0 {
+				return actool.Errorf(fmt.Sprintf("本轮退役已达上限 %d 条：先让 worker 消化积压，下一轮再清理（避免一轮清空导致链式误伤）", maxIntentRetirePerRun)), nil
+			} else if len(ids) > remaining {
+				return actool.Errorf(fmt.Sprintf("本轮最多还能退役 %d 条，本次提交 %d 条：请分轮处理，优先保留证据更完整的替代方向", remaining, len(ids))), nil
+			}
+			if len(sup) > 0 {
+				for _, sid := range sup {
+					if sid <= 0 {
+						continue
+					}
+					for _, id := range ids {
+						if sid == id {
+							return actool.Errorf(fmt.Sprintf("superseded_by 不能指向本次要退役的意图 #%d（自指替代等于没有覆盖）", sid)), nil
+						}
+					}
+					sn, err := t.ts.GetNode(sid)
+					if err != nil || sn == nil {
+						return actool.Errorf(fmt.Sprintf("superseded_by #%d 不存在：替代必须是本任务已存在的意图", sid)), nil
+					}
+					if sn.Kind != db.KindIntent {
+						return actool.Errorf(fmt.Sprintf("superseded_by #%d 是 %q 节点：只能是意图 id", sid, sn.Kind)), nil
+					}
+					switch sn.State {
+					case "open", "running", "done":
+						// 存活替代，可接受
+					default:
+						return actool.Errorf(fmt.Sprintf("superseded_by #%d 当前状态为 %s：替代已被退役/终止，禁止链式退役（请先确认该覆盖类仍有存活意图或事实兜底）", sid, sn.State)), nil
+					}
+				}
+				reason += "；替代意图：" + joinNodeRefs(sup)
+			}
+			if reasonClaimsPremiseInvalid(reason) && !t.reasonCitesKnowledge(reason) {
+				return actool.Errorf("reason 声称『前提失效/被否定』但没有引用任何现存 fact/finding 节点号：请写出否定它的事实 id，或改为 superseded_by 表达重复"), nil
+			}
+			retired := []int64{}
+			errs := map[string]string{}
+			for _, id := range ids {
+				key := strconv.FormatInt(id, 10)
+				n, err := t.ts.GetNode(id)
+				if err != nil || n == nil {
+					errs[key] = "意图不存在"
+					continue
+				}
+				if n.Kind != db.KindIntent {
+					errs[key] = "不是意图节点：" + n.Kind
+					continue
+				}
+				switch n.State {
+				case "open":
+					// 可退役
+				case "running", "paused":
+					errs[key] = "正在执行：先用 kill_work 终止，再退役"
+					continue
+				default:
+					errs[key] = "已是终态（" + n.State + "），无需退役"
+					continue
+				}
+				if _, err := t.ts.SoftDeleteIntent(id, "planner 退役："+reason); err != nil {
+					errs[key] = err.Error()
+					continue
+				}
+				t.retiredThisRun++
+				retired = append(retired, id)
+			}
+			out := map[string]any{"retired": retired, "retired_this_round": t.retiredThisRun, "round_limit": maxIntentRetirePerRun}
+			if len(errs) > 0 {
+				out["errors"] = errs
+			}
+			return jsonResult(out)
+		})
+}
+
+const maxIntentRetirePerRun = 6
+
+func reasonClaimsPremiseInvalid(reason string) bool {
+	for _, w := range []string{"前提", "否定", "失效", "证伪", "已被回答", "死目标"} {
+		if strings.Contains(reason, w) {
+			return true
+		}
+	}
+	return false
+}
+
+func (t *ToolSet) reasonCitesKnowledge(reason string) bool {
+	for _, id := range nodeRefIDs(reason) {
+		n, err := t.ts.GetNode(id)
+		if err != nil || n == nil {
+			continue
+		}
+		if n.Kind == db.KindFact || n.Kind == db.KindFinding {
+			return true
+		}
+	}
+	return false
+}
+
+func nodeRefIDs(s string) []int64 {
+	var out []int64
+	for i := 0; i < len(s); i++ {
+		if s[i] != '#' {
+			continue
+		}
+		j := i + 1
+		for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+			j++
+		}
+		if j > i+1 {
+			if n, err := strconv.ParseInt(s[i+1:j], 10, 64); err == nil && n > 0 && n < 1<<40 {
+				out = append(out, n)
+			}
+		}
+		i = j
+	}
+	return out
+}
+
+func joinNodeRefs(ids []int64) string {
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		parts = append(parts, "#"+strconv.FormatInt(id, 10))
+	}
+	return strings.Join(parts, "/")
 }
 
 func (t *ToolSet) listGoals() actool.CoreTool {
@@ -2707,7 +2951,7 @@ func (t *ToolSet) PlannerTools() []actool.CoreTool {
 		t.graphOverview(), t.listFindings(), t.listFacts(), t.nodeDetail(),
 		// cold-digest §6.1: restore folded cold nodes (digest body → members → detail).
 		t.expandDigest(),
-		t.getWorkerOutput(), t.getWorkerTrace(), t.searchAllWorkerTraces(), t.listGoals(), t.addIntent(), t.proveGoal(), t.goalMet(),
+		t.getWorkerOutput(), t.getWorkerTrace(), t.searchAllWorkerTraces(), t.listGoals(), t.addIntent(), t.retireIntent(), t.proveGoal(), t.goalMet(),
 		t.killWorkTool(), t.steerWorkTool(),
 		// report_finding：规划态势研判时若自身已确证漏洞，可直接登记（与 worker 同工具）。
 		t.addFinding(),

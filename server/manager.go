@@ -81,6 +81,31 @@ type Task struct {
 	settleMu            sync.Mutex
 	pendingSettleReason string
 	pendingSettleDetail string
+
+	// autopilot 是自主推进开关的运行态镜像（每次现查，关掉开关下一次规划/执行
+	// 就回到普通任务语义）。持久化在 tasks.autopilot。
+	autopilot atomic.Bool
+}
+
+// AutopilotEnabled reports whether this task is running in autopilot mode.
+func (t *Task) AutopilotEnabled() bool { return t != nil && t.autopilot.Load() }
+
+// SetAutopilot flips the runtime mirror (persistence happens in db.SetTaskAutopilot).
+func (t *Task) SetAutopilot(on bool) { t.autopilot.Store(on) }
+
+// NotifyAutopilotStall wakes the planner with an autopilot stall trigger.
+//
+// 刻意**不复用 hint**：hint 会进 freshDirection（新增方向），在 auto_finish 里
+// 触发 ResetTaskProgress 把 idle 计数清零——看门狗一唤醒就等于宣布「有新进展」，
+// 恰好把要判定的停滞信号抹掉。这个 kind 只唤醒、不改方向、不重置进度。
+func (t *Task) NotifyAutopilotStall(detail string) {
+	if t == nil || strings.TrimSpace(detail) == "" {
+		return
+	}
+	t.trigMu.Lock()
+	t.pendingTriggers = append(t.pendingTriggers, agent.TriggerEvent{Kind: "autopilot_stall", Detail: detail})
+	t.trigMu.Unlock()
+	t.Notify()
 }
 
 // requestSettle 登记自动收尾原因（不在此处执行 settle）。重复登记以最后一条为准。
@@ -1143,7 +1168,7 @@ func unixNanoOrZero(t *time.Time) int64 {
 }
 
 func taskFromPG(pt *pgdb.Task, store *pgdb.ExplorationStore, ic *intercept.Interceptor) *Task {
-	return &Task{
+	t := &Task{
 		ID: strconv.FormatInt(pt.ID, 10), ExpID: pt.ExplorationID,
 		Name:       pt.Name,
 		CategoryID: cloneInt64Ptr(pt.CategoryID), CategoryName: pt.CategoryName,
@@ -1162,6 +1187,8 @@ func taskFromPG(pt *pgdb.Task, store *pgdb.ExplorationStore, ic *intercept.Inter
 		FirstRunAt:      unixOrZero(pt.FirstRunAt), DeadlineAt: unixOrZero(pt.DeadlineAt),
 		Store: store, Guard: guard.NewWithInterceptor(ic), notify: make(chan struct{}, 1),
 	}
+	t.autopilot.Store(pt.Autopilot)
+	return t
 }
 
 // UpdateTaskMetadata changes list-only task metadata without interrupting any
@@ -1452,6 +1479,31 @@ func (m *Manager) SetTaskPaused(id string, paused bool) error {
 	return nil
 }
 
+// SetTaskAutopilot 持久化单任务自主推进开关，并同步运行态镜像与留痕。
+func (m *Manager) SetTaskAutopilot(id string, on bool) (*Task, error) {
+	m.taskStateMu.Lock()
+	defer m.taskStateMu.Unlock()
+	n, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.pg.SetTaskAutopilot(n, on); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	t := m.tasks[id]
+	m.mu.Unlock()
+	if t != nil {
+		t.autopilot.Store(on)
+	}
+	kind, detail := "disabled", "自主推进已关闭"
+	if on {
+		kind, detail = "enabled", "自主推进已开启"
+	}
+	_ = m.pg.InsertAutopilotEvent(id, kind, detail)
+	return t, nil
+}
+
 // ApplyTaskAdmission atomically commits the lifecycle fields controlled by the
 // concurrency scheduler. Keeping status, paused and queue metadata in one UPDATE
 // prevents a failed resume from leaving a task half-revived (for example running
@@ -1508,6 +1560,10 @@ func (m *Manager) ApplyTaskAdmission(id, expectedStatus, status string, queued b
 	    deadline_at=CASE
 	        WHEN $6 IN ('done','failed','timeout') AND $2 NOT IN ('done','failed','timeout') THEN NULL
 	        ELSE deadline_at
+	    END,
+	    autopilot_extensions=CASE
+	        WHEN $6 IN ('done','failed','timeout') AND $2 NOT IN ('done','failed','timeout') THEN 0
+	        ELSE autopilot_extensions
 	    END
 	WHERE id=$1 AND deleted_at IS NULL AND status=$6
 	RETURNING queued_at, queue_mode, completed_at, first_run_at, deadline_at`, n, status, queued, mode, preservePosition, expectedStatus).

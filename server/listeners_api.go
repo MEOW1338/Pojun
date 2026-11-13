@@ -58,7 +58,7 @@ func (s *Server) listenerStart(w http.ResponseWriter, r *http.Request) {
 	// 本机端口已在收，隧道可后续修；错误随响应带出）。
 	cb := s.ResolveConnectBack(l.Port)
 	if s.c2RelayConfig().Mode == "ssh" {
-		if terr := s.startRelayTunnel(l.Name, l.Port, r.Context()); terr != nil {
+		if terr := s.startRelayTunnel(l.Name, l.Port); terr != nil {
 			cb.Via = "中继隧道建立失败: " + terr.Error()
 		}
 	}

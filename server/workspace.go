@@ -46,11 +46,8 @@ var workspaceProtectedDirs = []string{"traffic", "evidence", "nuclei-templates"}
 // wsProtected reports whether an absolute path is one of the protected system
 // directories (the directory itself, or anything under it).
 func (s *Server) wsProtected(abs string) bool {
-	root := filepath.Clean(s.m.dir)
-	target := filepath.Clean(abs)
 	for _, name := range workspaceProtectedDirs {
-		p := filepath.Join(root, name)
-		if target == p || strings.HasPrefix(target, p+string(os.PathSeparator)) {
+		if pathWithin(filepath.Join(s.m.dir, name), abs) {
 			return true
 		}
 	}
@@ -68,7 +65,41 @@ func (s *Server) wsResolve(rel string) (string, bool) {
 	if abs != base && !strings.HasPrefix(abs, base+string(os.PathSeparator)) {
 		return "", false
 	}
-	return abs, true
+	// 符号链接需要第二道校验：Clean+HasPrefix 是词法判断，工作区内的链接
+	// 仍可能指向 /etc 或 JWT key。已存在的目标解析真实路径；新目标则解析
+	// 最近的存在父目录后再接受。这是 check-then-use 防护，非 openat 竞态修复。
+	baseReal := base
+	if resolved, err := filepath.EvalSymlinks(base); err == nil {
+		baseReal = filepath.Clean(resolved)
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		if !pathWithin(baseReal, resolved) {
+			return "", false
+		}
+		return abs, true
+	} else if !os.IsNotExist(err) {
+		return "", false
+	}
+	// 目标尚不存在：校验最近存在的父目录，剩余后缀在已验证的真实父目录之下创建。
+	parent := filepath.Dir(abs)
+	for {
+		if resolved, err := filepath.EvalSymlinks(parent); err == nil {
+			return abs, pathWithin(baseReal, resolved)
+		} else if !os.IsNotExist(err) {
+			return "", false
+		}
+		next := filepath.Dir(parent)
+		if next == parent {
+			return "", false
+		}
+		parent = next
+	}
+}
+
+func pathWithin(base, target string) bool {
+	base = filepath.Clean(base)
+	target = filepath.Clean(target)
+	return target == base || strings.HasPrefix(target, base+string(os.PathSeparator))
 }
 
 // wsRel renders an absolute path back as a workspace-relative path (forward slashes).

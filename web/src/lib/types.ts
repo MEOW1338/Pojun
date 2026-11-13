@@ -20,6 +20,7 @@ export interface Task {
   completed_unix?: number; // completed_at as unix seconds (0/undef if unfinished)
   last_activity_unix?: number; // unix seconds of the last activity (0/undef if none)
   paused?: boolean;
+  autopilot?: boolean;
   queued?: boolean;
   active?: boolean;
   in_flight?: number;

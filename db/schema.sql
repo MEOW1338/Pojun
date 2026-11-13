@@ -568,6 +568,28 @@ CREATE INDEX IF NOT EXISTS idx_tasks_pinned ON tasks(pinned_at DESC)
 CREATE INDEX IF NOT EXISTS idx_tasks_archived ON tasks(archived_at DESC)
     WHERE archived_at IS NOT NULL;
 
+-- ── 自主推进（Autopilot）──────────────────────────────────────────────
+-- autopilot：任务级开关。停滞自动重规划、deadline 自动延长、不因「没新增」被
+-- 自动收尾（见 server/autopilot.go）。平台审批不放行，与公开版审批门一致。
+-- autopilot_extensions：已自动延长 deadline 的次数；任务复活时归零（见
+-- ApplyTaskAdmission），防止长时间运行的任务被无限延长。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS autopilot BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS autopilot_extensions INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_tasks_autopilot ON tasks(created_at DESC)
+    WHERE autopilot AND deleted_at IS NULL;
+
+-- 自主推进的决策留痕：开启/关闭、停滞唤醒、deadline 延长、收尾抑制。
+-- task_id 用 TEXT 与 task_progress/intercept_pending 的约定一致（不做外键，
+-- 任务硬删除时由 DeleteTaskCascade 清理）。
+CREATE TABLE IF NOT EXISTS autopilot_events (
+    id         BIGSERIAL PRIMARY KEY,
+    task_id    TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    detail     TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_autopilot_events_task ON autopilot_events(task_id, id DESC);
+
 -- Cold task archives retain only compact metadata in PostgreSQL. The complete
 -- task payload lives in a versioned .tar.zst package under data/archives/tasks.
 -- task_id stays unique so an operation can be retried safely after a restart.

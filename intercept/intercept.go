@@ -51,7 +51,22 @@ type taskCtxKey int
 const (
 	taskInfoCtxKey taskCtxKey = 1
 	taskEmitCtxKey taskCtxKey = 2
+	// autopilotCtxKey 是自主推进开关的读取器（每次调用现查，中途关掉开关时
+	// 下一次规划/执行就恢复普通任务语义）。
+	autopilotCtxKey taskCtxKey = 3
 )
+
+// WithAutopilot 注入自主推进开关读取器（nil/返回 false = 普通任务）。
+// 仅用于决定是否在系统提示末尾追加自主推进尾巴；不改变审批与拦截语义。
+func WithAutopilot(ctx context.Context, enabled func() bool) context.Context {
+	return context.WithValue(ctx, autopilotCtxKey, enabled)
+}
+
+// AutopilotFromContext 取回自主推进开关读取器；未注入时返回 nil。
+func AutopilotFromContext(ctx context.Context) func() bool {
+	f, _ := ctx.Value(autopilotCtxKey).(func() bool)
+	return f
+}
 
 type taskCtxInfo struct{ taskID, agentName string }
 

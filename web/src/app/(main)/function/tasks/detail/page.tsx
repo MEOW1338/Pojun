@@ -5,7 +5,7 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
-import { ArchiveIcon, ArrowLeftIcon, BrainIcon, CheckIcon, CircleAlertIcon, PauseIcon, PlayIcon } from "lucide-react";
+import { ArchiveIcon, ArrowLeftIcon, BotIcon, BrainIcon, CheckIcon, CircleAlertIcon, PauseIcon, PlayIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { StatusBadge } from "@/components/status-badge";
@@ -280,6 +280,7 @@ function TaskDetailInner() {
         }
         setTask(base);
         setPaused(at?.paused ?? base.paused ?? false);
+        setAutopilot(Boolean(base.autopilot));
       })
       .catch((err: unknown) => {
         const status = (err as { status?: number } | null)?.status;
@@ -301,6 +302,26 @@ function TaskDetailInner() {
     const timer = setInterval(load, 5000);
     return () => clearInterval(timer);
   }, [load]);
+
+  const [autopilot, setAutopilot] = React.useState(false);
+  const [togglingAutopilot, setTogglingAutopilot] = React.useState(false);
+
+  async function toggleAutopilot() {
+    if (!task) return;
+    const next = !autopilot;
+    setTogglingAutopilot(true);
+    try {
+      // 开启时顺带 resume：暂停/排队中的任务一键继续，这就是「一键推进」。
+      const r = await api.setTaskAutopilot(task.id, next, next);
+      setAutopilot(next);
+      if (r.resumed) setPaused(false);
+      toast.success(next ? (r.resumed ? "已开启自主推进并恢复任务" : "已开启自主推进") : "已关闭自主推进");
+    } catch (e) {
+      toast.error(`操作失败：${(e as Error).message}`);
+    } finally {
+      setTogglingAutopilot(false);
+    }
+  }
 
   async function togglePause() {
     if (task && ["done", "failed", "timeout"].includes(task.status)) return;
@@ -424,6 +445,16 @@ function TaskDetailInner() {
             </Tooltip>
           )}
           </span>
+          <Button
+            size="sm"
+            variant={autopilot ? "default" : "outline"}
+            onClick={toggleAutopilot}
+            disabled={terminal || togglingAutopilot}
+            title="自主推进：停滞自动重规划、目标未达成不收尾、deadline 自动延长（审批门照常生效）"
+          >
+            <BotIcon className="size-4" />
+            {autopilot ? "自主推进中" : "自主推进"}
+          </Button>
           <Button size="sm" variant={controlVariant} onClick={togglePause} disabled={terminal}>
             {controlIcon}
             {controlLabel}

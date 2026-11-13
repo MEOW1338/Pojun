@@ -137,6 +137,7 @@ func (d *DB) ListFindings(limit int) ([]*DBFinding, error) {
 		SELECT `+findingSelectCols+`
 		FROM findings f
 		LEFT JOIN tasks t ON f.task_id = t.id
+		WHERE f.status <> 'duplicate' AND f.merged_into_id IS NULL
 		ORDER BY f.created_at DESC
 		LIMIT $1`, limit)
 	if err != nil {

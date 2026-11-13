@@ -42,6 +42,29 @@ ON CONFLICT (key) DO NOTHING`, key, desc, schema, agents)
 	return err
 }
 
+// MergeToolSchemaProperty 给已存在的内置工具补一个新增参数（升级路径）。
+//
+// SeedTool 是 first-insert-only（保留 UI 编辑），因此老库里的行不会自动拿到新版本
+// 新增的参数——模型按 DB 行覆盖后的 schema 调用，缺字段等于新能力不可见。
+// 只在 properties 缺少 prop 时合并该字段并更新描述；其余参数/用户编辑保持不变。幂等。
+func (d *DB) MergeToolSchemaProperty(key, prop string, props map[string]any, desc string) error {
+	if len(props) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(props)
+	if err != nil {
+		return err
+	}
+	_, err = d.Exec(`
+UPDATE tools SET
+  schema = jsonb_set(coalesce(schema,'{}'::jsonb), '{properties}',
+                     coalesce(schema->'properties','{}'::jsonb) || $3::jsonb),
+  description = $4
+WHERE key=$1
+  AND NOT (coalesce(schema->'properties','{}'::jsonb) ? $2)`, key, prop, string(raw), desc)
+	return err
+}
+
 // AddAgentToToolBinding adds an agent key to the given tools' `agents` arrays if
 // not already present (idempotent). Used to give the built-in Auto agent its
 // default toolset on existing DBs.

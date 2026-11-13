@@ -148,7 +148,7 @@ var relayTunnelMgr = &relayTunnels{byName: map[string]*exec.Cmd{}, cancels: map[
 // startRelayTunnel 为监听器建 SSH 反向隧道：中转 :port → 本机 127.0.0.1:port。
 // ExitOnForwardFailure + ServerAlive 保活；进程退出由 goroutine 指数退避重连，
 // 直到监听器停止（ctx 取消）。
-func (s *Server) startRelayTunnel(name string, port int, ctx context.Context) error {
+func (s *Server) startRelayTunnel(name string, port int) error {
 	cfg := s.c2RelayConfig()
 	if strings.TrimSpace(cfg.SSH) == "" {
 		return fmt.Errorf("ssh 中继未配置（c2_relay_ssh = user@host:port）")
@@ -157,45 +157,50 @@ func (s *Server) startRelayTunnel(name string, port int, ctx context.Context) er
 	if i := strings.LastIndex(cfg.SSH, ":"); i > 0 {
 		userHost, sshPort = cfg.SSH[:i], cfg.SSH[i+1:]
 	}
-	args := []string{
-		"-N", "-T",
-		"-o", "ExitOnForwardFailure=yes",
-		"-o", "ServerAliveInterval=15",
-		"-o", "ServerAliveCountMax=4",
-		"-o", "StrictHostKeyChecking=accept-new",
-		"-p", sshPort,
-		"-R", fmt.Sprintf("0.0.0.0:%d:127.0.0.1:%d", port, port),
-		userHost,
-	}
-	tunnelCtx, cancel := context.WithCancel(ctx)
-	cmd := exec.Command("ssh", args...)
-	cmd.Cancel = func() error { return nil } // go1.23+ Cancel 默认 Kill；显式 nil 化避免双杀
-	cmd.WaitDelay = time.Second
-	if strings.TrimSpace(cfg.Key) != "" {
-		args = append([]string{"-i", strings.TrimSpace(cfg.Key), "-o", "BatchMode=yes"}, args[1:]...)
-		cmd = exec.Command("ssh", args...)
-		cmd.Cancel = func() error { return nil }
-		cmd.WaitDelay = time.Second
-	} else if strings.TrimSpace(cfg.Pass) != "" {
-		// 密码认证走 sshpass（Kali/Ubuntu 可 apt install sshpass）。
-		full := []string{"-e"}
-		if strings.TrimSpace(cfg.Key) != "" {
-			full = append(full, "-i", strings.TrimSpace(cfg.Key))
+	key, pass := strings.TrimSpace(cfg.Key), strings.TrimSpace(cfg.Pass)
+	// 每次重连都重建 Cmd：exec.Cmd 用过之后不可复用（也不能按值拷贝）。
+	build := func() *exec.Cmd {
+		args := []string{
+			"-N", "-T",
+			"-o", "ExitOnForwardFailure=yes",
+			"-o", "ServerAliveInterval=15",
+			"-o", "ServerAliveCountMax=4",
+			"-o", "StrictHostKeyChecking=accept-new",
+			"-p", sshPort,
+			"-R", fmt.Sprintf("0.0.0.0:%d:127.0.0.1:%d", port, port),
 		}
-		full = append(full, args[1:]...)
-		cmd = exec.Command("sshpass", full...)
-		cmd.Env = append(cmd.Environ(), "SSHPASS="+cfg.Pass)
-		cmd.Cancel = func() error { return nil }
+		var cmd *exec.Cmd
+		switch {
+		case key != "":
+			args = append(args, "-i", key, "-o", "BatchMode=yes", userHost)
+			cmd = exec.Command("ssh", args...)
+		case pass != "":
+			// 密码认证走 sshpass（Kali/Ubuntu 可 apt install sshpass）。
+			args = append(args, userHost)
+			cmd = exec.Command("sshpass", append([]string{"-e"}, args...)...)
+			cmd.Env = append(cmd.Environ(), "SSHPASS="+pass)
+		default:
+			args = append(args, userHost)
+			cmd = exec.Command("ssh", args...)
+		}
 		cmd.WaitDelay = time.Second
+		return cmd
 	}
-	_ = cmd.Start()
+
+	first := build()
+	if err := first.Start(); err != nil {
+		return fmt.Errorf("启动 SSH 中继失败: %w", err)
+	}
+	// 隧道生命周期跟随监听器，不绑 HTTP 请求 context（请求结束就 cancel 会把隧道杀掉）。
+	tunnelCtx, cancel := context.WithCancel(context.Background())
 
 	relayTunnelMgr.mu.Lock()
-	relayTunnelMgr.byName[name] = cmd
+	relayTunnelMgr.byName[name] = first
 	relayTunnelMgr.cancels[name] = cancel
 	relayTunnelMgr.mu.Unlock()
 
 	go func() {
+		cmd := first
 		backoff := 3 * time.Second
 		for {
 			waitErr := cmd.Wait()
@@ -203,32 +208,46 @@ func (s *Server) startRelayTunnel(name string, port int, ctx context.Context) er
 				return // 监听器停止：正常退出
 			}
 			log.Printf("[c2] SSH 中继隧道断开（%s :%d）: %v，%s 后重连", name, port, waitErr, backoff)
-			select {
-			case <-tunnelCtx.Done():
-				return
-			case <-time.After(backoff):
+			for {
+				select {
+				case <-tunnelCtx.Done():
+					return
+				case <-time.After(backoff):
+				}
+				if backoff < time.Minute {
+					backoff *= 2
+				}
+				next := build()
+				if err := next.Start(); err != nil {
+					log.Printf("[c2] SSH 中继重连失败（%s :%d）: %v", name, port, err)
+					continue
+				}
+				cmd = next
+				relayTunnelMgr.mu.Lock()
+				relayTunnelMgr.byName[name] = cmd
+				relayTunnelMgr.mu.Unlock()
+				break
 			}
-			if backoff < time.Minute {
-				backoff *= 2
-			}
-			nxt := *cmd
-			_ = nxt.Start()
-			cmd = &nxt
 		}
 	}()
 	log.Printf("[c2] SSH 中继隧道已建立（%s）：中转 :%d → 本机 127.0.0.1:%d", name, port, port)
 	return nil
 }
 
-// stopRelayTunnel 拆除监听器对应的隧道。
+// stopRelayTunnel 拆除监听器对应的隧道：先取消重连，再结束当前进程。
+// 只 cancel 不 kill 会让 ssh 进程继续占着反向隧道（端口释放不了、重连的旧进程还会打架）。
 func stopRelayTunnel(name string) {
 	relayTunnelMgr.mu.Lock()
 	cancel := relayTunnelMgr.cancels[name]
+	cmd := relayTunnelMgr.byName[name]
 	delete(relayTunnelMgr.byName, name)
 	delete(relayTunnelMgr.cancels, name)
 	relayTunnelMgr.mu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
 	}
 }
 

@@ -21,6 +21,8 @@ import (
 // assets, judges whether the task goal is met, and emits 0..N exploration intents
 // into the frontier. It is the sole intent generator.
 type Planner struct {
+	// intentQueue 返回 (派发阈值, worker 数)；nil = 不限制。
+	intentQueue func() (int, int)
 	findingRecorder FindingRecorder
 	// 授权边界守卫开关（v0.4.63）：装配时从设置读取，传到 ToolSet。
 	scopeGuard           bool
@@ -110,6 +112,9 @@ func (p *Planner) SetWebSearch(o WebSearchOpts) { p.webSearch = o }
 // constraints get injected into the planner system prompt. Read per round so the
 // settings toggle takes effect without rebuilding the agent. nil = inject (default).
 func (p *Planner) SetConstraintInject(fn func() bool) { p.injectConstraints = fn }
+
+// SetIntentQueueLimit 安装派发阈值 resolver（nil = 不限制）。
+func (p *Planner) SetIntentQueueLimit(fn func() (int, int)) { p.intentQueue = fn }
 
 // wantConstraints reports whether constraint injection is enabled (default yes).
 func (p *Planner) wantConstraints() bool { return p.injectConstraints == nil || p.injectConstraints() }
@@ -213,6 +218,18 @@ func renderTriggers(ts *db.ExplorationStore, evs []TriggerEvent) string {
 			b.WriteString(fmt.Sprintf("\n- 人修改了目标，由「%s」变为「%s」—— 请据新目标调整探索方向（原方向若已不适用请停派）。", ev.OldGoal, ev.NewGoal))
 		case "finding":
 			b.WriteString(fmt.Sprintf("\n- 意图 #%d（%s）的 worker 报告了一个 finding：%s", ev.IntentID, intentSummary(ts, ev.IntentID), ev.Detail))
+		case "coverage_gap":
+			// 引擎侧覆盖矩阵提醒（server/coverage_nudge.go）：某一类漏洞至今没有
+			// 任何意图覆盖。不是模型自己的判断，是确定性检查的结果，优先级高。
+			b.WriteString("\n- " + ev.Detail)
+		case "depth_gap":
+			// 引擎侧纵深缺口提醒（server/depth_nudge.go）：资产已多、高危 finding 为 0，
+			// 要求停止铺面、把已验证线索打穿成 L3 证据。确定性检查，优先级高于普通观察。
+			b.WriteString("\n- " + ev.Detail)
+		case "autopilot_stall":
+			// 自主推进看门狗：只催促推进，不算「新方向」（不进 freshDirection，
+			// 因此不会重置 auto_finish 的 idle 计数）。
+			b.WriteString(fmt.Sprintf("\n- 自主推进：%s 本轮必须给出一个推进动作：派新意图、换方向重试、或补证据验证；不得以「探索完毕/信息不足」收场。", ev.Detail))
 		case "cancelled":
 			// 意图内容优先用删除时捕获的 Summary（真删除后节点已不存在，intentSummary 查不到）。
 			sm := ev.Summary
@@ -227,7 +244,7 @@ func renderTriggers(ts *db.ExplorationStore, evs []TriggerEvent) string {
 			if tail == "" {
 				tail = "（步骤摘要缺失，可用 get_worker_trace 拉取该意图的执行轨迹）"
 			}
-			b.WriteString(fmt.Sprintf("\n- 意图 #%d（%s）撞上限收场，但这轮没有写回任何东西（事实 0 / 资产 0 / 漏报 0）。它最近几步的实际动作是：%s。请勿直接丢弃这段尝试：先落一条 fact（derived_from 指向该意图，写清「试过什么、为何无效」），然后再判断这个方向还值不值得派。", ev.IntentID, intentSummary(ts, ev.IntentID), tail))
+			b.WriteString(fmt.Sprintf("\n- 意图 #%d（%s）撞上限收场，但这轮没有写回任何东西（事实 0 / 资产 0 / 漏报 0）。它最近几步的实际动作是：%s。请勿直接丢弃这段尝试：把「试过什么、为何无效」写进后续意图的 hypothesis（值得接续时），或派一条复盘/换向量的意图让 worker 落成 fact；你是只读规划者，不要自己找写类工具。然后再判断这个方向还值不值得派。", ev.IntentID, intentSummary(ts, ev.IntentID), tail))
 		default: // "done"
 			b.WriteString(fmt.Sprintf("\n- 意图 #%d（%s）的 worker 结束，输出结论：%s", ev.IntentID, intentSummary(ts, ev.IntentID), workerOutput(ts, ev.IntentID)))
 			// stop_reason 同步带出（B1）：exhausted=手段穷尽可接续、blocked=传输故障可重试、
@@ -425,6 +442,9 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	tsx := NewToolSet(ts, "planner")
 	tsx.SetFindingRecorder(p.findingRecorder)
 	tsx.SetScopeFlags(p.scopeGuard, p.scopeInheritWrites, p.crossTaskNotifyDedup)
+	if p.intentQueue != nil {
+		tsx.SetIntentQueueLimit(p.intentQueue)
+	}
 	if as != nil {
 		tsx.SetAssetStore(as, as.Companies())
 	}
@@ -446,6 +466,9 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	// 只留静态规划正文。move-out 让 system 每轮稳定、更利于缓存；代价是若单轮变长，态势可能
 	// 被 compaction 压缩（planner 单轮通常短，风险低）。situational 会拼进下方 input。
 	situational := renderTriggers(ts, triggers) + renderGraphOverview(tsx.graphOverviewData())
+	// 积压治理（v0.4.68）：把排太久/前提疑似失效的 open 意图摆到本轮输入，要求裁决。
+	// 只提示不自动杀——退役要由模型写原因，保留可追溯性。
+	situational += renderBacklogHygiene(ts)
 	// 任务级 deadline / 终局模式(经 ctx 注入,见 taskclock.go)。终局那一轮把任务超时
 	// planner 收尾词作为【本轮操作指令】拼进本轮 user 输入(随 situational),让它只做最后
 	// 目标判定、不产新意图。
@@ -463,6 +486,14 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	sysBody := plannerSystem(goal, p.workDir, taskDir)
 	if p.wantConstraints() {
 		sysBody += constraintBlock(ts) // 操作约束(若有)注入系统提示,框定探索边界
+	}
+	// 自主推进：完成优先（目标未达成不得以「边际收益」收场）。
+	sysBody += autopilotTail(ctx, autopilotPlannerGuidance)
+	// 派发节奏（v0.4.68）：本轮新增上限 + 退役护栏说明。
+	if p.intentQueue != nil {
+		limit, workers := p.intentQueue()
+		active, _ := ts.CountActiveIntents()
+		sysBody += pacingPlannerGuidance(limit, workers, active)
 	}
 	system, boundary := deferredSystem(sysBody, def)
 	// planner 无自身墙钟预算;有 deadline 时把 MaxDuration 夹逼到剩余,让在跑的规划轮在

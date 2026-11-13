@@ -22,6 +22,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -38,6 +39,7 @@ func main() {
 		socketMode  = flag.String("socket-mode", "0660", "socket 权限(八进制)")
 		socketGroup = flag.String("socket-group", "", "socket 属组(留空=不改,通常填主服务的运行用户)")
 		check       = flag.Bool("check", false, "自检后退出(不启动服务)")
+		installAll  = flag.Bool("install-all", false, "安装 catalog 中所有缺失工具后退出")
 		showVer     = flag.Bool("version", false, "打印版本后退出")
 	)
 	flag.Parse()
@@ -58,6 +60,10 @@ func main() {
 	}
 	if mgr == hostd.PkgNone {
 		log.Printf("[hostd] 警告: 未检测到 apt/dnf,GitHub/pip 类工具仍可安装")
+	}
+	if *installAll {
+		runInstallAll(mgr)
+		return
 	}
 
 	mode := parseMode(*socketMode)
@@ -99,6 +105,64 @@ func main() {
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
 	_ = os.Remove(*socketPath)
+}
+
+// runInstallAll 顺序安装 catalog 中所有缺失工具，供 install.sh --with-tools 预装。
+// 复用 hostd 的固定配方与串行队列；失败逐项打印，不中断后续安装。
+func runInstallAll(mgr hostd.PkgMgr) {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	hs := hostd.NewServer(ctx, log.New(os.Stderr, "", log.LstdFlags))
+	hs.Version = version
+	proxy := firstNonEmpty(os.Getenv("HTTPS_PROXY"), os.Getenv("https_proxy"), os.Getenv("HTTP_PROXY"), os.Getenv("http_proxy"))
+	if v, err := hostd.ValidateProxy(proxy); err == nil {
+		proxy = v
+	} else {
+		log.Printf("[hostd] 忽略非法代理: %v", err)
+		proxy = ""
+	}
+	missing := 0
+	failed := 0
+	for _, tool := range hosttools.Inventory() {
+		if tool.Available || !tool.Installable {
+			continue
+		}
+		missing++
+		fmt.Printf("[install] %-20s %s\n", tool.ID, tool.Name)
+		job, err := hs.Start(ctx, tool.ID, proxy)
+		if err != nil {
+			failed++
+			fmt.Printf("[skip] %-20s %v\n", tool.ID, err)
+			continue
+		}
+		for job.State != hostd.StateDone && job.State != hostd.StateFailed && job.State != hostd.StateCancelled {
+			select {
+			case <-ctx.Done():
+				fmt.Printf("[stop] %-20s 收到中断\n", tool.ID)
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+		if job.State == hostd.StateDone {
+			fmt.Printf("[ok]   %-20s 完成\n", tool.ID)
+		} else {
+			failed++
+			fmt.Printf("[fail] %-20s %s %s\n", tool.ID, job.State, job.Err)
+		}
+	}
+	fmt.Printf("[hostd] 预装结束：缺失 %d，失败 %d\n", missing, failed)
+	if failed > 0 {
+		os.Exit(1)
+	}
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // runCheck 不启动服务,只报告环境是否满足安装条件——供部署脚本与排障用。

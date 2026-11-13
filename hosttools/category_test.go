@@ -8,7 +8,7 @@ func TestEveryToolHasCategory(t *testing.T) {
 	known := map[Category]bool{
 		CatNetwork: true, CatWeb: true, CatDNS: true, CatCred: true,
 		CatCode: true, CatPivot: true, CatOOB: true, CatExploit: true,
-		CatMaterial: true, CatRuntime: true, CatMiddleware: true,
+		CatMaterial: true, CatRuntime: true, CatMiddleware: true, CatMobile: true,
 	}
 	for _, tool := range catalog {
 		if tool.Category == "" {

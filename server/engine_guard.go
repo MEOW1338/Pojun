@@ -33,6 +33,73 @@ const (
 	defaultIntentBudgetTokens  = 3_000_000
 )
 
+// 意图队列阈值（default 8）：本轮新增上限的基准，0=关闭节流。
+const (
+	settingIntentQueueLimit   = "intent_queue_limit"
+	defaultIntentQueueLimit   = 8
+)
+
+func intentQueueLimitFromPG(pg *db.DB) int {
+	if pg == nil {
+		return defaultIntentQueueLimit
+	}
+	if v, ok := settingInt(pg, settingIntentQueueLimit); ok {
+		if v < 0 {
+			v = 0
+		}
+		if v > 200 {
+			v = 200
+		}
+		return v
+	}
+	return defaultIntentQueueLimit
+}
+
+// 串行前置闸门（v0.4.68）：intent_requires_gate=1 时，带 requires_intents 的意图
+// 只有在全部前置意图进入终态后才可被领取。默认关闭——开着而规划者又滥用依赖会
+// 造成排队停滞，所以只作为严格串行链的显式开关。
+const settingIntentRequiresGate = "intent_requires_gate"
+
+func intentRequiresGateFromPG(pg *db.DB) bool {
+	if pg == nil {
+		return false
+	}
+	v, ok := settingInt(pg, settingIntentRequiresGate)
+	return ok && v == 1
+}
+
+// intentQueueBudget 是注入给 agent 的读取器：返回 (生效阈值, 当前全局 worker 数)。
+// 生效阈值 = max(设置值, 2*workers)：保证 open 队列至少能缓冲一轮并发完成。
+func (s *Server) intentQueueBudget() (int, int) {
+	workers := s.m.Workers()
+	return effectiveIntentThreshold(intentQueueLimitFromPG(s.m.pg), workers), workers
+}
+
+// effectiveIntentThreshold 把设置值折算成实际阈值；0（关闭）保持 0。
+func effectiveIntentThreshold(limit, workers int) int {
+	if limit <= 0 {
+		return 0
+	}
+	if 2*workers > limit {
+		return 2 * workers
+	}
+	return limit
+}
+
+// intentBacklogFull 判断单任务未完成意图是否已达派发上限（心跳轮跳过用：
+// 积压满时再规划只会被 add_intent 拒绝、白烧 token）。边沿触发不受影响。
+func (e *Engine) intentBacklogFull(t *Task) bool {
+	if e == nil || e.m == nil || t == nil || t.Store == nil {
+		return false
+	}
+	limit := effectiveIntentThreshold(intentQueueLimitFromPG(e.m.pg), e.m.Workers())
+	if limit <= 0 {
+		return false
+	}
+	active, err := t.Store.CountActiveIntents()
+	return err == nil && active >= limit
+}
+
 type intentBudgetConfig struct {
 	Enabled bool
 	Tokens  int64

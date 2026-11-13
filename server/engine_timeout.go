@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+
+	"github.com/chu0119/pojun/intercept"
 	"fmt"
 	"log"
 	"strconv"
@@ -342,6 +344,7 @@ func (e *Engine) runFinalPlannerRound(ctx context.Context, t *Task, reason strin
 	// 独立 ctx(不挂 execCancel,避免 pause/硬 cancel 打断这最后一轮),带 Final 注入
 	// 收尾词：timeout 用任务超时词，自动收尾用“按策略结束”词。
 	fctx := e.clockCtx(ctx, t, true, reason)
+	fctx = intercept.WithAutopilot(fctx, t.AutopilotEnabled) // 自主推进提示词尾巴（settle 轮）
 	if !e.beginTaskOperation(t.ID) {
 		return false
 	}

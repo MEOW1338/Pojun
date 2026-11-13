@@ -47,15 +47,15 @@ const (
 
 // Job 一次安装任务。
 type Job struct {
-	ID       string    `json:"id"`
-	ToolID   string    `json:"tool_id"`
-	ToolName string    `json:"tool_name"`
-	State    State     `json:"state"`
-	ExitCode int       `json:"exit_code"`
-	Err      string    `json:"error,omitempty"`
-	StartedAt  time.Time `json:"started_at"`
-	EndedAt    time.Time `json:"ended_at,omitempty"`
-	Log      string    `json:"log"`
+	ID        string    `json:"id"`
+	ToolID    string    `json:"tool_id"`
+	ToolName  string    `json:"tool_name"`
+	State     State     `json:"state"`
+	ExitCode  int       `json:"exit_code"`
+	Err       string    `json:"error,omitempty"`
+	StartedAt time.Time `json:"started_at"`
+	EndedAt   time.Time `json:"ended_at,omitempty"`
+	Log       string    `json:"log"`
 
 	mu     sync.Mutex
 	buf    bytes.Buffer
@@ -241,6 +241,8 @@ func (s *Server) run(ctx context.Context, j *Job, tool hosttools.Tool, proxy str
 		return s.runGitHub(ctx, j, tool, proxy)
 	case hosttools.KindPip:
 		return s.runPip(ctx, j, tool, proxy)
+	case hosttools.KindScript:
+		return s.execLogged(ctx, j, "/bin/sh", []string{"-c", tool.Script}, proxyEnv(proxy))
 	}
 	return 1, fmt.Errorf("不支持的安装方式: %s", tool.Kind)
 }
@@ -290,7 +292,47 @@ func (s *Server) runApt(ctx context.Context, j *Job, tool hosttools.Tool, proxy 
 
 func (s *Server) runPip(ctx context.Context, j *Job, tool hosttools.Tool, proxy string) (int, error) {
 	argv := pipArgv(tool, proxy)
-	return s.execLogged(ctx, j, argv[0], argv[1:], []string{"PIP_DISABLE_PIP_VERSION_CHECK=1"})
+	code, err := s.execLogged(ctx, j, argv[0], argv[1:], proxyEnv(proxy))
+	if err == nil {
+		return code, nil
+	}
+	// Debian/Ubuntu 的系统 Python 有大量 dist-packages（typing_extensions 等）
+	// 没有 RECORD 文件，pip 升级时卸载会报 uninstall-no-record-file。重试一次
+	// --ignore-installed：不卸载旧包，直接覆盖安装。
+	j.append("[warn] pip 首次安装失败，改用 --ignore-installed 重试\n")
+	argv = appendIgnoreInstalled(argv)
+	return s.execLogged(ctx, j, argv[0], argv[1:], proxyEnv(proxy))
+}
+
+// appendIgnoreInstalled 在 pip 的 install 子命令后插入 --ignore-installed。
+func appendIgnoreInstalled(argv []string) []string {
+	out := make([]string, 0, len(argv)+1)
+	for _, a := range argv {
+		out = append(out, a)
+		if a == "install" {
+			out = append(out, "--ignore-installed")
+		}
+	}
+	return out
+}
+
+// proxyEnv 把已校验的代理注入子进程环境，供 curl/git/pip/gem 等脚本使用。
+func proxyEnv(proxy string) []string {
+	env := []string{
+		"PIP_DISABLE_PIP_VERSION_CHECK=1",
+		"DEBIAN_FRONTEND=noninteractive",
+		// hostd 的 ProtectHome=true 会让 /root 不可写；pip/gem 默认把缓存写 HOME。
+		"HOME=/var/lib/pojun-hostd",
+		"XDG_CACHE_HOME=/var/cache/pojun-hostd",
+		"PIP_CACHE_DIR=/var/cache/pojun-hostd/pip",
+	}
+	if proxy == "" {
+		return env
+	}
+	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+		env = append(env, k+"="+proxy)
+	}
+	return append(env, "NO_PROXY=127.0.0.1,localhost", "no_proxy=127.0.0.1,localhost")
 }
 
 // runGitHub 从 GitHub Release 取单文件二进制并装到 /usr/local/bin。
@@ -305,18 +347,35 @@ func (s *Server) runGitHub(ctx context.Context, j *Job, tool hosttools.Tool, pro
 	u := GitHubAssetURL(tool, tag)
 	j.append(fmt.Sprintf("[*] 下载 %s\n", u))
 
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	resp, err := client.Do(req)
-	if err != nil {
-		return 1, fmt.Errorf("下载失败: %w", err)
+	var blob []byte
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		req.Header.Set("User-Agent", "pojun-hostd")
+		resp, err := client.Do(req)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			blob, err = io.ReadAll(io.LimitReader(resp.Body, 128<<20))
+			resp.Body.Close()
+			if err == nil && len(blob) > 0 {
+				lastErr = nil
+				break
+			}
+		} else if err == nil {
+			err = fmt.Errorf("HTTP %d", resp.StatusCode)
+			resp.Body.Close()
+		}
+		lastErr = err
+		if attempt < 3 {
+			j.append(fmt.Sprintf("[warn] 下载失败（%v），%d 秒后重试…\n", err, attempt*2))
+			select {
+			case <-ctx.Done():
+				return 1, ctx.Err()
+			case <-time.After(time.Duration(attempt*2) * time.Second):
+			}
+		}
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return 1, fmt.Errorf("下载失败: HTTP %d", resp.StatusCode)
-	}
-	blob, err := io.ReadAll(io.LimitReader(resp.Body, 128<<20))
-	if err != nil {
-		return 1, err
+	if lastErr != nil {
+		return 1, fmt.Errorf("下载失败: %w", lastErr)
 	}
 	j.append(fmt.Sprintf("[*] 已下载 %.1f MB,解压…\n", float64(len(blob))/(1<<20)))
 
@@ -329,6 +388,9 @@ func (s *Server) runGitHub(ctx context.Context, j *Job, tool hosttools.Tool, pro
 // installFromArchive 从归档里取出目标二进制装到 /usr/local/bin。
 // 支持 zip / tar(.gz) / 单文件 gz 三种形态。
 func installFromArchive(j *Job, blob []byte, tool hosttools.Tool) (int, error) {
+	if tool.Raw {
+		return installBinary(j, tool, blob)
+	}
 	want := tool.BinInZip
 	if want == "" {
 		want = tool.Bin
@@ -398,7 +460,13 @@ func installBinary(j *Job, tool hosttools.Tool, data []byte) (int, error) {
 	if want == "" {
 		want = tool.Bin
 	}
-	dst := filepath.Join(binDir, tool.Bin)
+	dst := tool.DestPath
+	if dst == "" {
+		dst = filepath.Join(binDir, tool.Bin)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return 1, fmt.Errorf("创建目录失败: %w", err)
+	}
 	tmp := dst + ".tmp"
 	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
@@ -439,7 +507,13 @@ func installFromZip(j *Job, zr *zip.Reader, tool hosttools.Tool) (int, error) {
 			return 1, err
 		}
 		defer rc.Close()
-		dst := filepath.Join(binDir, tool.Bin)
+		dst := tool.DestPath
+		if dst == "" {
+			dst = filepath.Join(binDir, tool.Bin)
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return 1, fmt.Errorf("创建目录失败: %w", err)
+		}
 		tmp := dst + ".tmp"
 		out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 		if err != nil {
@@ -499,6 +573,7 @@ func httpClient(proxy string) *http.Client {
 func latestTag(ctx context.Context, client *http.Client, apiURL string) (string, error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "pojun-hostd")
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err

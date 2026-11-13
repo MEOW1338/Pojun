@@ -46,7 +46,7 @@ func (t *Traffic) ReadEvidence(ctx context.Context, ids []string, consume func(E
 func (t *Traffic) readEvidence(id string, consume func(EvidenceExchange) error) error {
 	e := EvidenceExchange{ID: id}
 	var legacy string
-	if err := t.db.QueryRow(`SELECT ts,url,method,status,content_type,req_len,resp_len,path FROM exchanges WHERE id=?`, id).
+	if err := t.db.QueryRow(`SELECT COALESCE(ts,0),COALESCE(url,''),COALESCE(method,''),COALESCE(status,0),COALESCE(content_type,''),COALESCE(req_len,0),COALESCE(resp_len,0),COALESCE(path,'') FROM exchanges WHERE id=?`, id).
 		Scan(&e.TS, &e.URL, &e.Method, &e.Status, &e.ContentType, &e.ReqLen, &e.RespLen, &legacy); err != nil {
 		return err
 	}

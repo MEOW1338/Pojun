@@ -32,7 +32,7 @@ func TestRenderTriggersReviewCarriesPostmortem(t *testing.T) {
 	for _, want := range []string{
 		"没有写回任何东西",
 		"curl -s http://t/api/import 返回 403",
-		"derived_from",
+		"hypothesis",
 		"探 /api/import 的 fastjson 入口",
 	} {
 		if !strings.Contains(got, want) {

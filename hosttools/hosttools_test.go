@@ -68,10 +68,13 @@ func TestSummaryTextMarksAvailability(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PATH", dir)
 	txt := SummaryText()
-	// 空 PATH 下没有任何可用工具，SummaryText 返回空串
-	// （缺失清单对 worker 无用：它既不能装，也不该占 system prompt 的位置）。
-	if txt != "" {
-		t.Errorf("空 PATH 下应无可用工具清单,得到: %s", txt)
+	// PATH 类工具在空 PATH 下必然缺失；但 python:module 检测类工具（kombu/pymysql/redis）
+	// 走 python3 -c import，不受 PATH 影响——只要本机装了模块就会显示可用。
+	// 这里只断言 PATH 类工具不出现（按名匹配），不强求整串为空。
+	for _, name := range []string{"curl", "nmap"} {
+		if strings.Contains(txt, "✓ "+name+" ") || strings.Contains(txt, "✓ "+name+"\n") {
+			t.Errorf("空 PATH 下不应出现 PATH 类工具 %s: %s", name, txt)
+		}
 	}
 	// 有工具时必须带用途 —— 只给名字的话模型判断不出该在什么场景调哪个。
 	dir2 := t.TempDir()

@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -95,8 +97,8 @@ func (s *Server) chatUpload(w http.ResponseWriter, r *http.Request) {
 		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
 			continue
 		}
-		dest := uniqueUploadPath(dir, name)
-		if err := saveUpload(hdr, dest); err != nil {
+		dest, err := saveUploadUnique(dir, name, hdr)
+		if err != nil {
 			writeErr(w, 500, "保存失败: "+err.Error())
 			return
 		}
@@ -106,21 +108,40 @@ func (s *Server) chatUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"attachments": out})
 }
 
-// uniqueUploadPath returns dir/name, or dir/name-1, dir/name-2… when it already exists,
-// so re-uploading the same filename never clobbers a prior attachment.
-func uniqueUploadPath(dir, name string) string {
-	dest := filepath.Join(dir, name)
-	if _, err := os.Stat(dest); os.IsNotExist(err) {
-		return dest
+// saveUploadUnique creates the destination with O_EXCL so two concurrent uploads
+// with the same filename cannot clobber each other.
+func saveUploadUnique(dir, name string, hdr *multipart.FileHeader) (string, error) {
+	src, err := hdr.Open()
+	if err != nil {
+		return "", err
 	}
+	defer src.Close()
 	ext := filepath.Ext(name)
 	stem := strings.TrimSuffix(name, ext)
-	for i := 1; ; i++ {
-		cand := filepath.Join(dir, fmt.Sprintf("%s-%d%s", stem, i, ext))
-		if _, err := os.Stat(cand); os.IsNotExist(err) {
-			return cand
+	for i := 0; i < 10000; i++ {
+		dest := filepath.Join(dir, name)
+		if i > 0 {
+			dest = filepath.Join(dir, fmt.Sprintf("%s-%d%s", stem, i, ext))
 		}
+		out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if os.IsExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		_, copyErr := io.Copy(out, src)
+		closeErr := out.Close()
+		if copyErr != nil || closeErr != nil {
+			_ = os.Remove(dest)
+			if copyErr != nil {
+				return "", copyErr
+			}
+			return "", closeErr
+		}
+		return dest, nil
 	}
+	return "", fmt.Errorf("同名附件过多")
 }
 
 // composeAgentMessage appends an attachment manifest to the user's message so the agent
