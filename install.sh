@@ -1025,17 +1025,25 @@ install_tools(){
     # imagemagick：报告证据拼图/文件名水印（v0.4.10 起依赖）；
     # libreoffice-writer/calc/impress + poppler-utils：文档证据转图片预览
     # （v0.4.21 起，Word/Excel/PPT→PDF→JPEG）。
-    apt-get "${APT_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto gobuster ffuf john \
-      netcat-openbsd dnsutils whois unzip nodejs npm python3-impacket gitleaks imagemagick \
-      hashcat openssl openssh-client testssl.sh default-jre-headless apktool adb aapt awscli tcpdump sshuttle \
-      libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils \
-      >/dev/null 2>&1 \
-      || apt-get "${APT_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto gobuster ffuf john \
-           netcat-openbsd dnsutils whois unzip nodejs npm python3-impacket imagemagick \
-           hashcat openssl openssh-client testssl.sh default-jre-headless apktool adb aapt awscli tcpdump sshuttle \
-           libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils \
-           >/dev/null \
-      || warn "部分 apt 工具未装上"
+    # 安装策略：先按组整装（快），整组失败再**逐包重试**。
+    # 为什么必须逐包兜底：apt-get install 是原子事务，弱网下 200 个包里任何一个
+    # 下载失败会让整组回滚——实测丢 git（script 类工具全挂 127）这类关键小包。
+    apt_install() {
+      apt-get "${APT_PROXY[@]}" install -y "$@" >/dev/null 2>&1 && return 0
+      local p
+      for p in "$@"; do
+        apt-get "${APT_PROXY[@]}" install -y "$p" >/dev/null 2>&1 \
+          || warn "  apt 缺包: $p"
+      done
+    }
+    # 关键基础包优先（git/ca 证书这类缺失会让后续 script 安装全面失败）
+    apt_install git jq perl ruby ca-certificates curl wget unzip openssl openssh-client netcat-openbsd
+    # 渗透工具组
+    apt_install nmap masscan sqlmap hydra whatweb nikto gobuster ffuf john \
+      dnsutils whois nodejs npm python3-impacket gitleaks imagemagick \
+      hashcat testssl.sh default-jre-headless apktool adb aapt awscli tcpdump sshuttle
+    # 文档渲染组（体积大、弱网下最容易拖垮整组，单独一组）
+    apt_install libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils
   elif command -v dnf >/dev/null 2>&1; then
     dnf "${DNF_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto john nmap-ncat bind-utils unzip \
       nodejs python3-impacket ImageMagick hashcat openssl tcpdump \
@@ -1072,10 +1080,22 @@ install_catalog_tools(){
     was_active=1
     systemctl stop pojun-hostd 2>/dev/null || true
   fi
-  if "$bin" -install-all; then
-    ok "catalog 工具预装完成"
-  else
-    warn "catalog 工具预装部分失败；可在 Web「系统 → 宿主环境」逐项重试"
+  # 弱网下 GitHub/pip 抖动是常态：失败项自动重试三轮（每轮只重装缺失项，
+  # 已装好的直接跳过），大幅提高无人值守安装的成功率。
+  local attempt ok_any=0
+  for attempt in 1 2 3; do
+    if "$bin" -install-all; then
+      ok "catalog 工具预装完成"
+      ok_any=1
+      break
+    fi
+    if [ "$attempt" -lt 3 ]; then
+      warn "catalog 预装第 $attempt 轮存在失败项，30 秒后重试…"
+      sleep 30
+    fi
+  done
+  if [ "$ok_any" != "1" ]; then
+    warn "catalog 工具预装仍有失败项；可在 Web「系统 → 宿主环境」逐项重试"
   fi
   [ "$was_active" = "1" ] && systemctl start pojun-hostd 2>/dev/null || true
 }

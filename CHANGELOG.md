@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 
+## [0.4.70] - 2026-11-13
+
+> 安装器弱网韧性：apt 逐包兜底 + catalog 预装三轮重试（修 git 缺失导致 script 类安装全面失败）。
+
+### 修复
+
+- **install.sh apt 安装改为「整组失败 → 逐包重试」**：`apt-get install` 是原子事务，
+  弱网下 200+ 包里任何一个下载失败会整组回滚——实测把 `git` 一起丢掉，导致 catalog
+  里全部 script 类安装（SecLists / nikto / jwt_tool / searchsploit / msfconsole …）
+  报 127 失败。现在关键基础包（git/jq/perl/ruby/ca-certificates/curl/unzip/openssl/
+  openssh-client/netcat）、渗透工具组、文档渲染组分组安装，每组失败自动逐包重试。
+- **catalog 预装自动三轮重试**：`install.sh --with-tools` 的 `-install-all` 失败项
+  30 秒后自动重试（每轮只补缺失项），弱网下的无人值守安装成功率显著提高。
+- 关键包补齐：git / jq / perl / ruby（script 类安装的运行时依赖）。
+
+### 验证
+
+- 干净 Debian 12 容器跑 `install.sh --mode=binary --with-tools`：主流程成功
+  （PostgreSQL/服务/systemd/health 全过）；git 单包装载验证通过，随后的 catalog
+  补装按逐包路径继续推进（该验证容器处在限速网络，失败项可重试补齐）。
+- Linux 真机（Kali）与 Docker compose 两条路径此前已验证 90/90。
+
+
 ## [0.4.69] - 2026-11-13
 
 > 安装形态专项：工具目录 90/90 全平台可达（Linux 实测 90/90）、Docker 镜像
