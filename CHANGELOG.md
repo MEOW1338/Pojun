@@ -4,6 +4,48 @@
 
 ## [Unreleased]
 
+## [0.4.69] - 2026-11-13
+
+> 安装形态专项：工具目录 90/90 全平台可达（Linux 实测 90/90）、Docker 镜像
+> 7.76GB → 4.99GB（-36%）、构建源可配置、安装器健壮性修复。
+
+### Docker：瘦身 + 开箱即用
+
+- **镜像瘦身约 2.8GB**：SecLists（约 2.5GB）不再在构建期克隆，改为容器首次启动
+  时由 catalog 后台预装；其余工具分层不变。实测镜像 7.76GB → **4.99GB**。
+- **首次启动后台预装 catalog 全量工具**：entrypoint 拉起常驻 hostd 后，后台执行
+  `-install-all`（不阻塞主服务），日志 `data/tools-preinstall.log`，「宿主环境」页
+  实时反映；装完写标记，重启不重复；`POJUN_PREINSTALL_TOOLS=0` 可关闭、
+  `=force` 强制重跑。
+- **hostd 常驻容器内**：镜像新增 pojun-hostd，entrypoint 拉起后「宿主环境」页可
+  运行期一键装/重装工具（此前 Docker 形态完全没有 hostd）。
+- **构建源可配置**：`--build-arg DEBIAN_MIRROR= / PIP_INDEX_URL= / NODESOURCE_URL=`，
+  受限网络可直接换镜像源构建（CI 默认官方源不受影响）。
+
+### 安装器：工具目录 90/90
+
+- **catalog 检测增强**：`Detect: any:path:...` 多候选（ImageMagick 7 是 `magick`、
+  Debian 6.x 只有 `convert`——此前在 Debian 巡检里被误报缺失）。
+- **nikto 改 script 安装**：bookworm 源没有 nikto 包，改为 git clone + 软链（apt 缺失
+  不再是硬失败）。
+- **GitHub 版本解析双通道**：API 403 时自动走 `releases/latest` 的 302 Location
+  （不消耗 API 配额）；解决共享出口 IP 被限流时整批 GitHub 工具解析失败。
+- **script 类安装统一 900s 墙钟**：网络卡死不再阻塞串行安装队列（实测 jadx 下载
+  曾把 install-all 挂住 15 分钟+）；catalog 内全部 curl 统一
+  `--retry 3 --connect-timeout 15 --max-time 600`。
+- `install.sh --with-tools` 的 apt 组补齐 11 项（hashcat/openssl/openssh-client/
+  testssl.sh/default-jre-headless/apktool/adb/aapt/awscli/tcpdump/sshuttle）。
+- CI：Linux 二进制产物新增 pojun-hostd，供 Docker 构建复用。
+
+### 验证
+
+- **Linux 真机（Kali）**：`pojun-hostd -install-all` → 缺失 0、失败 0；
+  `/api/hostenv/status` → **90/90 可用**。
+- **Docker（compose 全套）**：镜像 4.99GB；容器启动后 health 200、初始化/登录/
+  仪表盘正常；核心工具（nmap/sqlmap/nuclei/ffuf/LibreOffice/Node20/Python3.11）
+  逐项验证；catalog 预装日志逐项核对。
+
+
 ## [0.4.68] - 2026-11-13
 
 > 稳定性修复批次 + 自主推进与派发节流：把任务跑法从「派完等、积压空转」推进到

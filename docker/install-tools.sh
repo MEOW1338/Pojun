@@ -162,21 +162,12 @@ elif [ "$imp_ok" != "1" ]; then
   warn "  impacket 命令不可用（PyPI 与 GitHub 均不可达；体检页会如实显示缺失）"
 fi
 
-# ── SecLists 字典集 ──────────────────────────────────
-# 路径必须是 /opt/SecLists——hosttools.go 的 seclists 条目与 worker 提示词
-# 引用的都是这个目录。浅克隆 + 去掉 .git 减体积。
-if [ ! -d /opt/SecLists/Discovery ]; then
-  info "克隆 SecLists 字典集（浅克隆）..."
-  sec_ok=0
-  for i in 1 2 3; do
-    git clone --depth 1 https://github.com/danielmiessler/SecLists.git /opt/SecLists >/dev/null 2>&1 \
-      && { sec_ok=1; break; }
-    rm -rf /opt/SecLists; sleep 8
-  done
-  [ "$sec_ok" = "1" ] \
-    && { rm -rf /opt/SecLists/.git; ok "  SecLists → /opt/SecLists"; } \
-    || warn "  SecLists 克隆失败（构建机网络问题；运行时可按 hosttools 目录条目手动克隆）"
-fi
+# ── SecLists 字典集：不在构建期装（v0.4.69）─────────────────
+# SecLists 浅克隆约 2.5GB，是镜像体积的最大单项。改为容器首次启动时由
+# 「catalog 后台预装」安装（hosttools 的 seclists 条目，KindScript + Detect
+# dir:/opt/SecLists），主镜像因此瘦身约 2.5GB；用户也可以在「宿主环境」页
+# 单独安装/重装。二进制部署走 install_wordlists（install.sh）不变。
+info "SecLists 字典集改为首次启动后台预装（不在镜像构建期克隆）"
 
 # ── 汇总体检 ─────────────────────────────────────────
 info "内置工具清单："

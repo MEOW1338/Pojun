@@ -1027,16 +1027,19 @@ install_tools(){
     # （v0.4.21 起，Word/Excel/PPT→PDF→JPEG）。
     apt-get "${APT_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto gobuster ffuf john \
       netcat-openbsd dnsutils whois unzip nodejs npm python3-impacket gitleaks imagemagick \
+      hashcat openssl openssh-client testssl.sh default-jre-headless apktool adb aapt awscli tcpdump sshuttle \
       libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils \
       >/dev/null 2>&1 \
       || apt-get "${APT_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto gobuster ffuf john \
            netcat-openbsd dnsutils whois unzip nodejs npm python3-impacket imagemagick \
+           hashcat openssl openssh-client testssl.sh default-jre-headless apktool adb aapt awscli tcpdump sshuttle \
            libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils \
            >/dev/null \
       || warn "部分 apt 工具未装上"
   elif command -v dnf >/dev/null 2>&1; then
     dnf "${DNF_PROXY[@]}" install -y nmap masscan sqlmap hydra whatweb nikto john nmap-ncat bind-utils unzip \
-      nodejs python3-impacket ImageMagick libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils \
+      nodejs python3-impacket ImageMagick hashcat openssl tcpdump \
+      libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils \
       || warn "dnf 部分包缺失，已装可用项"
   else
     warn "未识别的包管理器，跳过系统源工具安装"

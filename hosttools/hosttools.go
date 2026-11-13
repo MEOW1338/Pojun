@@ -173,12 +173,14 @@ var catalog = []Tool{
 	{Name: "nmap", Purpose: "端口扫描/服务指纹", Kind: KindApt, Category: CatNetwork, Apt: "nmap", Dnf: "nmap"},
 	{Name: "masscan", Purpose: "大规模端口快扫", Kind: KindApt, Category: CatNetwork, Apt: "masscan", Dnf: "masscan"},
 	{Name: "sqlmap", Purpose: "SQL 注入检测与利用", Kind: KindApt, Category: CatWeb, Apt: "sqlmap", Dnf: "sqlmap"},
-	{Name: "imagemagick", Bin: "magick", Purpose: "证据图片处理：拼图/水印/脱敏（报告照片证据必需）", Kind: KindApt, Category: CatRuntime, Apt: "imagemagick", Dnf: "ImageMagick"},
+	{Name: "imagemagick", Bin: "magick", Purpose: "证据图片处理：拼图/水印/脱敏（报告照片证据必需）", Kind: KindApt, Category: CatRuntime, Apt: "imagemagick", Dnf: "ImageMagick",
+		Detect: "any:path:/usr/bin/magick,path:/usr/bin/convert,path:/usr/local/bin/magick,path:/usr/local/bin/convert"},
 	{Name: "libreoffice", Purpose: "文档证据预览：Word/Excel/PPT→PDF（附件缩略图与报告预览）", Kind: KindApt, Category: CatRuntime, Apt: "libreoffice-writer libreoffice-calc libreoffice-impress", Dnf: "libreoffice-writer libreoffice-calc libreoffice-impress"},
 	{Name: "poppler", Bin: "pdftoppm", Purpose: "PDF 转图片（文档证据预览必需）", Kind: KindApt, Category: CatRuntime, Apt: "poppler-utils", Dnf: "poppler-utils"},
 	{Name: "ffuf", Purpose: "目录/参数模糊枚举", Kind: KindApt, Category: CatWeb, Apt: "ffuf", Dnf: "ffuf"},
 	{Name: "gobuster", Purpose: "目录/DNS/vhost 爆破", Kind: KindApt, Category: CatWeb, Apt: "gobuster", Dnf: "gobuster"},
-	{Name: "nikto", Purpose: "Web 服务器常见问题扫描", Kind: KindApt, Category: CatWeb, Apt: "nikto", Dnf: "nikto"},
+	{Name: "nikto", Purpose: "Web 服务器常见问题扫描", Kind: KindScript, Category: CatWeb,
+		Script: `if ! command -v nikto >/dev/null 2>&1; then rm -rf /opt/nikto && git clone --depth 1 https://github.com/sullo/nikto.git /opt/nikto && chmod +x /opt/nikto/program/nikto.pl && ln -sf /opt/nikto/program/nikto.pl /usr/local/bin/nikto && nikto -Version >/dev/null 2>&1; fi`},
 	{Name: "whatweb", Purpose: "Web 指纹识别", Kind: KindApt, Category: CatWeb, Apt: "whatweb", Dnf: "whatweb"},
 	{Name: "hydra", Purpose: "在线口令爆破(ssh/登录表单等)", Kind: KindApt, Category: CatCred, Apt: "hydra", Dnf: "hydra"},
 	{Name: "john", Purpose: "离线口令破解", Kind: KindApt, Category: CatCred, Apt: "john", Dnf: "john"},
@@ -221,9 +223,9 @@ var catalog = []Tool{
 	{Name: "adb", Purpose: "Android 设备直连：安装/拉取/日志/端口转发", Kind: KindApt, Category: CatMobile, Apt: "adb", Dnf: "android-tools"},
 	{Name: "jadx", Purpose: "APK→Java 反编译（接口/密钥/业务逻辑）", Kind: KindScript, Category: CatMobile,
 		Script: `set -e
-curl -fsSL https://api.github.com/repos/skylot/jadx/releases/latest | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4 > /tmp/jadx.tag
+curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 https://api.github.com/repos/skylot/jadx/releases/latest | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4 > /tmp/jadx.tag
 TAG=$(cat /tmp/jadx.tag); VER=${TAG#v}
-curl -fsSL -o /tmp/jadx.zip "https://github.com/skylot/jadx/releases/download/${TAG}/jadx-${VER}.zip"
+curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 -o /tmp/jadx.zip "https://github.com/skylot/jadx/releases/download/${TAG}/jadx-${VER}.zip"
 rm -rf /opt/jadx && mkdir -p /opt/jadx && unzip -q -o /tmp/jadx.zip -d /opt/jadx
 ln -sf /opt/jadx/bin/jadx /usr/local/bin/jadx
 ln -sf /opt/jadx/bin/jadx-gui /usr/local/bin/jadx-gui 2>/dev/null || true
@@ -257,7 +259,7 @@ for b in psexec wmiexec secretsdump atexec smbclient; do [ -f "/usr/local/bin/$b
 		Detect: "path:/opt/winpeas/winPEASx64.exe",
 		Script: `set -e
 mkdir -p /opt/winpeas
-curl -fsSL -o /opt/winpeas/winPEASx64.exe https://github.com/peass-ng/PEASS-ng/releases/latest/download/winPEASx64.exe
+curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 -o /opt/winpeas/winPEASx64.exe https://github.com/peass-ng/PEASS-ng/releases/latest/download/winPEASx64.exe
 chmod +x /opt/winpeas/winPEASx64.exe
 `},
 	// SecLists 是最大的通用字典集(目录爆破/参数 fuzz 的语料)。apt 源里没有
@@ -293,22 +295,22 @@ chmod +x /opt/jwt_tool/jwt_tool.py
 		Detect: "dir:/opt/ysoserial.net",
 		Script: `set -e
 mkdir -p /opt/ysoserial.net
-API=$(curl -fsSL https://api.github.com/repos/pwntester/ysoserial.net/releases/latest)
+API=$(curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 https://api.github.com/repos/pwntester/ysoserial.net/releases/latest)
 URL=$(printf '%s' "$API" | grep -o '"browser_download_url": *"[^"]*\.zip"' | head -1 | cut -d'"' -f4)
-[ -n "$URL" ] && curl -fsSL -o /tmp/ysnet.zip "$URL" && unzip -q -o /tmp/ysnet.zip -d /opt/ysoserial.net
+[ -n "$URL" ] && curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 -o /tmp/ysnet.zip "$URL" && unzip -q -o /tmp/ysnet.zip -d /opt/ysoserial.net
 `},
 	{Name: "searchsploit", Purpose: "ExploitDB 本地检索(组件/CVE 对应 PoC)", Kind: KindScript, Category: CatExploit,
 		Script: `set -e
 if [ ! -d /opt/exploitdb/exploits ]; then rm -rf /opt/exploitdb; git clone --depth 1 https://gitlab.com/exploit-database/exploitdb.git /opt/exploitdb; fi
-curl -fsSL -o /usr/local/bin/searchsploit https://gitlab.com/exploit-database/exploitdb/-/raw/main/searchsploit
+curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 -o /usr/local/bin/searchsploit https://gitlab.com/exploit-database/exploitdb/-/raw/main/searchsploit
 chmod +x /usr/local/bin/searchsploit
 `},
 	{Name: "trivy", Purpose: "镜像/依赖/IaC 漏洞与密钥扫描", Kind: KindGitHub, Category: CatCode,
 		Repo: "aquasecurity/trivy", AssetTmpl: "trivy_{ver}_Linux-{arch5}.tar.gz"},
 	{Name: "kubectl", Purpose: "K8s 集群操作与 RBAC 探测", Kind: KindScript, Category: CatNetwork,
 		Script: `set -e
-VER=$(curl -fsSL https://dl.k8s.io/release/stable.txt)
-curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/${VER}/bin/linux/amd64/kubectl"
+VER=$(curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 https://dl.k8s.io/release/stable.txt)
+curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 -o /usr/local/bin/kubectl "https://dl.k8s.io/release/${VER}/bin/linux/amd64/kubectl"
 chmod +x /usr/local/bin/kubectl
 `},
 	{Name: "kube-hunter", Purpose: "K8s 攻击面探测(远程/集群内)", Kind: KindPip, Category: CatNetwork, Pip: "kube-hunter"},
@@ -434,7 +436,7 @@ python3 -m pip install --break-system-packages "git+https://github.com/Pennyw0rt
 
 	{Name: "msfconsole", Purpose: "Metasploit 框架(exploit/encoder)", Kind: KindScript, Category: CatExploit,
 		Script: `set -e
-curl -fsSL -o /tmp/msfinstall https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb
+curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 -o /tmp/msfinstall https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb
 chmod +x /tmp/msfinstall
 /tmp/msfinstall
 `},
@@ -494,22 +496,43 @@ func Lookup(id string) (Tool, bool) {
 
 // AvailableInPath 该工具当前是否可用。优先按 Detect 判定（文件/目录/Python 模块），
 // 否则走 PATH 查找。
+//
+// Detect 支持多候选前缀 "any:"，逗号分隔，任一命中即可用（不同发行版同一工具的
+// 命令名不一致时用：ImageMagick 7 是 magick、Debian 6.x 只有 convert）。
 func (t Tool) AvailableInPath() bool {
 	if t.Detect != "" {
-		kind, target, ok := strings.Cut(t.Detect, ":")
-		if !ok || target == "" {
+		if rest, ok := strings.CutPrefix(t.Detect, "any:"); ok {
+			for _, cand := range strings.Split(rest, ",") {
+				cand = strings.TrimSpace(cand)
+				if cand == "" {
+					continue
+				}
+				if detectOne(cand) {
+					return true
+				}
+			}
 			return false
 		}
-		switch kind {
-		case "path", "dir":
-			_, err := os.Stat(target)
-			return err == nil
-		case "python":
-			return pythonModuleAvailable(target)
-		}
+		return detectOne(t.Detect)
 	}
 	_, err := exec.LookPath(t.Bin)
 	return err == nil
+}
+
+// detectOne 判断单个探测表达式（path:/dir:/python:）。
+func detectOne(detect string) bool {
+	kind, target, ok := strings.Cut(detect, ":")
+	if !ok || target == "" {
+		return false
+	}
+	switch kind {
+	case "path", "dir":
+		_, err := os.Stat(target)
+		return err == nil
+	case "python":
+		return pythonModuleAvailable(target)
+	}
+	return false
 }
 
 // pythonModuleAvailable 用 python3 -c import 探测纯库是否可用。
